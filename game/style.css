@@ -1,0 +1,38 @@
+/* SOLMAR BAY — HUD and menu styling. Sun-soaked teal/gold on dark glass. */
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1b26; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #eef1f5; }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+#hud-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 14px; align-items: center; }
+#health { width: 220px; height: 22px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.35); border-radius: 4px; position: relative; overflow: hidden; }
+#health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #27ae60, #2ecc71); transition: width 0.2s; }
+#health-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; text-shadow: 0 1px 2px #000; }
+#cash { font-size: 22px; font-weight: 800; color: #2ecc71; text-shadow: 0 1px 3px #000; }
+#stars { font-size: 24px; letter-spacing: 2px; color: #ffd166; text-shadow: 0 1px 3px #000; }
+#stars.hot { color: #ff4444; animation: blink 0.6s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+#clock { margin-left: auto; font-size: 14px; background: rgba(0,0,0,0.55); padding: 6px 10px; border-radius: 4px; }
+#objective { position: absolute; top: 48px; left: 12px; max-width: 520px; font-size: 15px; font-weight: 600; background: rgba(0,0,0,0.55); padding: 8px 12px; border-left: 4px solid #ffd166; border-radius: 3px; }
+#message { position: absolute; top: 96px; left: 12px; max-width: 520px; font-size: 14px; background: rgba(0,0,0,0.45); padding: 6px 10px; border-radius: 3px; }
+#prompt { position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%); font-size: 15px; font-weight: 700; background: rgba(0,0,0,0.6); padding: 8px 14px; border-radius: 4px; color: #ffd166; }
+#hud-bottom { position: absolute; bottom: 12px; left: 12px; display: flex; gap: 18px; font-size: 14px; text-shadow: 0 1px 3px #000; }
+#speed { font-size: 20px; font-weight: 800; }
+#minimap { position: absolute; right: 12px; bottom: 12px; border: 2px solid rgba(255,255,255,0.5); border-radius: 6px; background: #0d1b26; }
+#banner { position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%); display: none; font-size: 34px; font-weight: 900; color: #ffd166; text-shadow: 0 2px 8px #000; text-align: center; }
+
+.screen { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; background: linear-gradient(180deg, rgba(6,20,32,0.55), rgba(6,20,32,0.85)); z-index: 10; padding: 20px; }
+.screen.active { display: flex; }
+.screen h1 { font-size: 64px; margin: 0; letter-spacing: 6px; color: #ffd166; text-shadow: 0 3px 0 #0e4a6e, 0 6px 18px #000; }
+.screen .tagline { font-size: 18px; max-width: 640px; margin: 0; }
+.screen .story { font-size: 15px; max-width: 640px; margin: 0; color: #cfd8dc; }
+.buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+button { pointer-events: auto; cursor: pointer; font-size: 17px; font-weight: 800; letter-spacing: 1px; padding: 12px 26px; border: none; border-radius: 6px; background: #ffd166; color: #10222e; }
+button:hover { background: #ffe08a; }
+#mission-list { list-style: none; padding: 0; margin: 6px 0 0; font-size: 14px; color: #b0bec5; text-align: left; }
+#mission-list li.done { color: #2ecc71; text-decoration: line-through; }
+#mission-list li.current { color: #ffd166; font-weight: 700; }
+.controls-hint { font-size: 13px; color: #90a4ae; max-width: 640px; }
+.howto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 760px; text-align: left; }
+.howto-grid div { background: rgba(255,255,255,0.07); padding: 12px 14px; border-radius: 6px; }
+.howto-grid p { margin: 4px 0 0; font-size: 14px; color: #cfd8dc; }
