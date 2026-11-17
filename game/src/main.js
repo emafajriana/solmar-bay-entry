@@ -429,22 +429,30 @@ function runGame() {
     if (document.hidden && state.screen === SCREEN_PLAY) setScreen(SCREEN_PAUSED);
   });
 
+  // Pending one-shot actions: a press is kept until a simulation step
+  // consumes it, so a short press on a fast frame is never lost.
+  let pendingActions = 0;
   function frame(now) {
     requestAnimationFrame(frame);
     accumulator += Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    const actions = input.takeActions();
+    pendingActions |= input.takeActions();
+    const actions = pendingActions;
     if (state.screen === SCREEN_TITLE && (actions & ACTION_CONFIRM)) startGame(true);
     else if (state.screen === SCREEN_OVER && (actions & ACTION_CONFIRM)) startGame(true);
     else if (state.screen === SCREEN_VICTORY && (actions & ACTION_CONFIRM)) startGame(true);
     else if ((actions & ACTION_PAUSE) && state.screen === SCREEN_PLAY) setScreen(SCREEN_PAUSED);
     else if ((actions & ACTION_PAUSE) && state.screen === SCREEN_PAUSED) setScreen(SCREEN_PLAY);
     else if ((actions & ACTION_CONFIRM) && state.screen === SCREEN_PAUSED) setScreen(SCREEN_PLAY);
+    // Screen-transition bits are consumed here, so a single P press can
+    // never pause and instantly resume on the next frame.
+    pendingActions &= ~(ACTION_CONFIRM | ACTION_PAUSE);
 
     if (state.screen === SCREEN_PLAY) {
       let firstStep = true;
       while (accumulator >= STEP) {
-        stepWorld(STEP, false, firstStep ? actions : 0);
+        stepWorld(STEP, false, firstStep ? pendingActions : 0);
+        if (firstStep) pendingActions = 0;
         firstStep = false;
         accumulator -= STEP;
         if (state.screen !== SCREEN_PLAY) { accumulator = 0; break; }
@@ -458,6 +466,7 @@ function runGame() {
       if (!retry) retryHeld = false;
     } else {
       accumulator = 0;
+      pendingActions = 0; // presses made off-screen never fire after resume
       // Title screen still animates the city behind it.
       if (state.screen === SCREEN_TITLE) state.time += 1 / 60;
     }
