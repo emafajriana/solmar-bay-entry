@@ -1,271 +1,255 @@
-// SOLMAR BAY — combat: fists and firearms, for the player and for anyone
-// shooting back.
-//
-// Player fire is a ray from the camera through the crosshair, tested
-// against pedestrians and gang members (spheres), cars (circles) and the
-// building colliders (which cap the ray's range). Every pellet leaves a
-// tracer that fades over a few frames. Enemy fire is resolved the other
-// way: a hit chance by range, a tracer either way, and an event when the
-// player is struck. Nothing here decides what a hit *means* — events go
-// up to the game, which handles crimes, knockouts and mission kills.
+// combat.js — fists and firearms, for the player and for everyone
+// shooting back. Hitscan with a little spread, tracer lines that live
+// for a blink, and the crime reports that feed District Heat: a shot is
+// only a crime if a unit is close enough to hear it (police.js decides).
 
-import * as THREE from "three";
-import { WEAPONS } from "./config.js";
-import { audio } from "./audio.js";
+import * as THREE from 'three';
+import { WEAPONS } from './config.js';
+
+const TRACER_MAX = 28;
 
 export class Combat {
-  constructor(scene, save) {
+  constructor(scene) {
     this.scene = scene;
-    this.owned = { fist: true, pistol: !!save.weapons.pistol, shotgun: !!save.weapons.shotgun, rifle: !!save.weapons.rifle };
-    this.mag = { pistol: WEAPONS.pistol.mag, shotgun: WEAPONS.shotgun.mag, rifle: WEAPONS.rifle.mag };
-    this.reserve = { pistol: 36, shotgun: 16, rifle: 60 };
-    this.current = "fist";
+    this.current = 'fists';
+    this.owned = { fists: true, pistol: false, shotgun: false, rifle: false };
+    this.mag = { pistol: 12, shotgun: 6, rifle: 30 };
+    this.reserve = { pistol: 0, shotgun: 0, rifle: 0 };
     this.cooldown = 0;
-    this.reloadTimer = 0;
+    this.reloadT = 0;
     this.tracers = [];
-    this.tracerMat = new THREE.LineBasicMaterial({ color: 0xffe9a3, transparent: true, opacity: 0.9 });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRACER_MAX * 2 * 3), 6));
+    this.tracerLines = new THREE.LineSegments(geo,
+      new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.9 }));
+    this.tracerLines.frustumCulled = false;
+    scene.add(this.tracerLines);
+    this.puffs = [];
   }
 
-  select(name) {
-    if (this.owned[name]) this.current = name;
+  unlock(key) {
+    this.owned[key] = true;
+    if (key === 'pistol') this.reserve.pistol = Math.max(this.reserve.pistol, 24);
+    if (key === 'shotgun') this.reserve.shotgun = Math.max(this.reserve.shotgun, 12);
+    if (key === 'rifle') this.reserve.rifle = Math.max(this.reserve.rifle, 60);
   }
 
-  selectSlot(slot) {
-    for (const [name, w] of Object.entries(WEAPONS)) {
-      if (w.slot === slot && this.owned[name]) {
-        // Slot 3 holds two weapons; pressing it again swaps between them.
-        if (name === this.current) continue;
-        this.current = name;
-        return;
-      }
-    }
+  addAmmo() {
+    this.reserve.pistol += 48;
+    this.reserve.shotgun += 18;
+    this.reserve.rifle += 60;
   }
 
-  give(name) {
-    this.owned[name] = true;
-    this.mag[name] = WEAPONS[name].mag;
-    this.reserve[name] = Math.max(this.reserve[name], WEAPONS[name].mag * 2);
-    this.current = name;
+  ammoLabel() {
+    if (this.current === 'fists') return '—';
+    return `${this.mag[this.current]} / ${this.reserve[this.current]}`;
   }
 
-  refillAll() {
-    this.reserve.pistol = 72;
-    this.reserve.shotgun = 32;
-    this.reserve.rifle = 120;
-    for (const name of ["pistol", "shotgun", "rifle"]) {
-      if (this.owned[name]) this.mag[name] = WEAPONS[name].mag;
-    }
+  spawnTracer(a, b, color = 0xffe9a8) {
+    this.tracers.push({ a: a.clone(), b: b.clone(), life: 0.06, color });
+    if (this.tracers.length > TRACER_MAX) this.tracers.shift();
   }
 
-  startReload() {
-    const w = WEAPONS[this.current];
-    if (!w || w.mag === Infinity) return;
-    if (this.mag[this.current] >= w.mag || this.reserve[this.current] <= 0) return;
-    if (this.reloadTimer > 0) return;
-    this.reloadTimer = 0.85;
-    audio.reload();
-  }
-
-  tracer(from, to, color = 0xffe9a3) {
-    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
-    const mat = this.tracerMat.clone();
-    if (color !== 0xffe9a3) mat.color.setHex(color);
-    const line = new THREE.Line(geo, mat);
-    this.scene.add(line);
-    this.tracers.push({ line, life: 0.09 });
-  }
-
-  // The player's trigger. origin/dir come from the camera. Returns true
-  // when a shot (or a swing) actually happened.
-  attack(dt, world, events, origin, dir) {
-    void dt; // the cooldown itself ticks in update()
-    const name = this.current;
-    const w = WEAPONS[name];
-    if (this.reloadTimer > 0) return false;
-    if (name === "fist") {
-      if (this.cooldown > 0) return false;
-      this.cooldown = w.rate;
-      audio.punch();
-      // A swing connects with the nearest person inside arm's reach and
-      // roughly in front of the camera.
-      let best = null;
-      for (const ped of [...world.peds, ...world.cops]) {
-        if (ped.down) continue;
-        const dx = ped.pos.x - origin.x;
-        const dz = ped.pos.z - origin.z;
-        const d = Math.hypot(dx, dz);
-        if (d < w.range && d > 0.01) {
-          const dot = (dx / d) * dir.x + (dz / d) * dir.z;
-          if (dot > 0.45 && (!best || d < best.d)) best = { ped, d };
-        }
-      }
-      if (best) {
-        best.ped.hurt(w.damage, events, "punch");
-        events.push({ type: "punchHit", x: best.ped.pos.x, z: best.ped.pos.z });
-        audio.thud();
-      } else {
-        events.push({ type: "punchAir", x: origin.x + dir.x * 2, z: origin.z + dir.z * 2 });
-      }
-      return true;
-    }
-    if (this.cooldown > 0) return false;
-    if (this.mag[name] <= 0) {
-      this.cooldown = 0.3;
-      audio.dryFire();
-      this.startReload();
-      return false;
-    }
-    this.cooldown = w.rate;
-    this.mag[name]--;
-    audio.shot(name);
-    events.push({ type: "shot", weapon: name, x: origin.x, z: origin.z });
-    for (let p = 0; p < w.pellets; p++) {
-      const d = new THREE.Vector3(
-        dir.x + (Math.random() - 0.5) * 2 * w.spread,
-        dir.y + (Math.random() - 0.5) * 2 * w.spread,
-        dir.z + (Math.random() - 0.5) * 2 * w.spread
-      ).normalize();
-      this.fireRay(world, events, origin, d, w, name);
-    }
-    if (this.mag[name] <= 0) this.startReload();
-    return true;
-  }
-
-  fireRay(world, events, origin, dir, w, weaponName) {
-    let range = w.range;
-    // Buildings cap the ray.
-    for (const c of world.colliders) {
-      const t = rayAabb(origin, dir, c);
-      if (t !== null && t < range) range = t;
-    }
-    const end = new THREE.Vector3(origin.x + dir.x * range, origin.y + dir.y * range, origin.z + dir.z * range);
-    let hitSomething = false;
-    // People: a body sphere and a head sphere (head hits count double).
-    for (const ped of [...world.peds, ...world.cops]) {
-      if (ped.down) continue;
-      const bodyC = new THREE.Vector3(ped.pos.x, ped.pos.y + 1.05, ped.pos.z);
-      const headC = new THREE.Vector3(ped.pos.x, ped.pos.y + 1.68, ped.pos.z);
-      const tBody = raySphere(origin, dir, bodyC, 0.62);
-      const tHead = raySphere(origin, dir, headC, 0.3);
-      const t = tHead !== null ? tHead : tBody;
-      if (t !== null && t <= range) {
-        ped.hurt(w.damage * (tHead !== null ? 2 : 1), events, "shot");
-        events.push({ type: "pedHit", ped, weapon: weaponName, x: ped.pos.x, z: ped.pos.z });
-        hitSomething = true;
-      }
-    }
-    // Cars: a squat cylinder test in the ground plane.
-    for (const car of world.cars) {
-      const dx = car.pos.x - origin.x;
-      const dz = car.pos.z - origin.z;
-      const along = dx * dir.x + dz * dir.z;
-      if (along < 0 || along > range) continue;
-      const px = origin.x + dir.x * along;
-      const pz = origin.z + dir.z * along;
-      if (Math.hypot(car.pos.x - px, car.pos.z - pz) < 2.3) {
-        car.health = Math.max(0, car.health - w.damage * 0.7);
-        events.push({ type: "carShot", car, x: car.pos.x, z: car.pos.z });
-        hitSomething = true;
-      }
-    }
-    void hitSomething;
-    const muzzle = new THREE.Vector3(origin.x + dir.x * 0.7, origin.y - 0.12, origin.z + dir.z * 0.7);
-    this.tracer(muzzle, end, 0xffe9a3);
-  }
-
-  // An enemy (gang member or foot cop) fires at a target position.
-  enemyShoot(shooter, target, world, events, now) {
-    if (shooter.reload > now) return;
-    shooter.reload = now + 0.9 + Math.random() * 0.7;
-    const from = new THREE.Vector3(shooter.pos.x, shooter.pos.y + 1.35, shooter.pos.z);
-    const dist = Math.hypot(target.x - shooter.pos.x, target.z - shooter.pos.z);
-    const aim = new THREE.Vector3(
-      target.x + (Math.random() - 0.5) * 2.4,
-      1.1,
-      target.z + (Math.random() - 0.5) * 2.4
-    );
-    this.tracer(from, aim, 0xff9a7a);
-    audio.shot("pistol");
-    events.push({ type: "shot", weapon: "pistol", x: shooter.pos.x, z: shooter.pos.z, enemy: true });
-    const hitChance = Math.max(0.04, 0.42 - dist * 0.008);
-    if (Math.random() < hitChance) {
-      events.push({ type: "playerShot", amount: 5 + Math.random() * 6, x: target.x, z: target.z });
-    }
-  }
-
-  update(dt) {
-    if (this.cooldown > 0) this.cooldown -= dt;
-    if (this.reloadTimer > 0) {
-      this.reloadTimer -= dt;
-      if (this.reloadTimer <= 0) {
-        const name = this.current;
-        const w = WEAPONS[name];
-        if (w && w.mag !== Infinity) {
-          const need = w.mag - this.mag[name];
-          const take = Math.min(need, this.reserve[name]);
-          this.mag[name] += take;
-          this.reserve[name] -= take;
-        }
-      }
-    }
+  update(dt, G) {
+    this.cooldown -= dt;
+    // --- tracers ---
+    const attr = this.tracerLines.geometry.getAttribute('position');
+    let w = 0;
     for (let i = this.tracers.length - 1; i >= 0; i--) {
       const t = this.tracers[i];
       t.life -= dt;
-      t.line.material.opacity = Math.max(0, t.life / 0.09) * 0.9;
-      if (t.life <= 0) {
-        this.scene.remove(t.line);
-        t.line.geometry.dispose();
-        t.line.material.dispose();
-        this.tracers.splice(i, 1);
+      if (t.life <= 0) { this.tracers.splice(i, 1); continue; }
+    }
+    for (const t of this.tracers) {
+      attr.setXYZ(w++, t.a.x, t.a.y, t.a.z);
+      attr.setXYZ(w++, t.b.x, t.b.y, t.b.z);
+    }
+    for (let i = w; i < TRACER_MAX * 2; i++) attr.setXYZ(i, 0, -50, 0);
+    attr.needsUpdate = true;
+
+    if (G.mode !== 'playing' || G.playerInCar) { G.aiming = false; return; }
+
+    // --- weapon switching ---
+    const input = G.input;
+    if (input.pressed('Digit1')) this.current = 'fists';
+    if (input.pressed('Digit2') && this.owned.pistol) this.current = 'pistol';
+    if (input.pressed('Digit3')) {
+      if (this.current !== 'shotgun' && this.owned.shotgun) this.current = 'shotgun';
+      else if (this.owned.rifle) this.current = 'rifle';
+    }
+    if (input.pressed('Digit4') && this.owned.rifle) this.current = 'rifle';
+    G.aiming = this.current !== 'fists';
+
+    // --- reloading ---
+    if (this.reloadT > 0) {
+      this.reloadT -= dt;
+      if (this.reloadT <= 0) this.finishReload(G);
+      return;
+    }
+    if (input.pressed('KeyR')) this.startReload(G);
+
+    // --- firing: click shoots a gun; fists swing on F or click ---
+    const trigger = this.current === 'fists'
+      ? (input.mouseDown || input.pressed('KeyF'))
+      : input.mouseDown;
+    if (trigger && this.cooldown <= 0) this.fire(G);
+  }
+
+  startReload(G) {
+    const key = this.current;
+    if (key === 'fists') return;
+    const spec = WEAPONS[key];
+    if (this.mag[key] >= spec.mag || this.reserve[key] <= 0) return;
+    this.reloadT = key === 'shotgun' ? 1.6 : key === 'rifle' ? 1.4 : 0.9;
+    G.audio.reload();
+  }
+
+  finishReload(G) {
+    const key = this.current;
+    const spec = WEAPONS[key];
+    const take = Math.min(spec.mag - this.mag[key], this.reserve[key]);
+    this.mag[key] += take;
+    this.reserve[key] -= take;
+  }
+
+  fire(G) {
+    const key = this.current;
+    const spec = WEAPONS[key];
+    this.cooldown = spec.rate;
+    const origin = G.playerPos.clone();
+    origin.y += 1.45;
+    const aim = G.aimDir; // unit vector the camera looks along
+
+    if (key === 'fists') {
+      G.audio.punch();
+      let best = null, bestD = spec.range;
+      for (const ped of G.peds) {
+        if (ped.dead) continue;
+        const dx = ped.pos.x - origin.x, dz = ped.pos.z - origin.z;
+        const d = Math.hypot(dx, dz);
+        if (d < bestD && (dx * aim.x + dz * aim.z) / (d || 1) > 0.3) { best = ped; bestD = d; }
+      }
+      if (best) {
+        const died = best.damage(spec.damage);
+        G.police.reportCrime('punch', best.pos.x, best.pos.z, G);
+        if (died) G.onPedKilled(best, 'fists');
+        else best.fleeFrom(origin.x, origin.z, G.time);
+      }
+      return;
+    }
+
+    if (this.mag[key] <= 0) {
+      G.audio.dryFire();
+      this.cooldown = 0.3;
+      this.startReload(G);
+      return;
+    }
+    this.mag[key]--;
+    G.audio.shot(key);
+    G.camKick += spec.kick * 0.0035;
+    G.police.reportCrime('shotsHeard', origin.x, origin.z, G);
+    for (const ped of G.peds) {
+      if (ped.role === 'civil' && Math.hypot(ped.pos.x - origin.x, ped.pos.z - origin.z) < 15) {
+        ped.fleeFrom(origin.x, origin.z, G.time);
+      }
+    }
+    const muzzle = origin.clone().addScaledVector(aim, 0.7);
+    muzzle.y -= 0.12;
+    for (let p = 0; p < spec.pellets; p++) {
+      const dir = aim.clone();
+      dir.x += (Math.random() - 0.5) * 2 * spec.spread;
+      dir.y += (Math.random() - 0.5) * 2 * spec.spread;
+      dir.z += (Math.random() - 0.5) * 2 * spec.spread;
+      dir.normalize();
+      this.castShot(G, muzzle, dir, spec);
+    }
+    if (this.mag[key] === 0) this.startReload(G);
+  }
+
+  // One hitscan ray against peds (cylinders), cars (spheres) and the
+  // built world (AABBs). Nearest hit wins; a tracer shows the path.
+  castShot(G, origin, dir, spec) {
+    let bestT = spec.range;
+    let hitPed = null, hitCar = null;
+    for (const ped of G.peds) {
+      if (ped.dead) continue;
+      const ox = ped.pos.x - origin.x, oz = ped.pos.z - origin.z;
+      const t = ox * dir.x + oz * dir.z;
+      if (t < 0 || t > bestT) continue;
+      const px = origin.x + dir.x * t, pz = origin.z + dir.z * t;
+      const side = Math.hypot(px - ped.pos.x, pz - ped.pos.z);
+      const y = origin.y + dir.y * t;
+      if (side < 0.44 && y > 0.05 && y < 1.85) { bestT = t; hitPed = ped; hitCar = null; }
+    }
+    for (const car of G.cars) {
+      const ox = car.pos.x - origin.x, oy = 0.8 - origin.y, oz = car.pos.z - origin.z;
+      const t = ox * dir.x + oy * dir.y + oz * dir.z;
+      if (t < 0 || t > bestT) continue;
+      const px = origin.x + dir.x * t, py = origin.y + dir.y * t, pz = origin.z + dir.z * t;
+      if (Math.hypot(px - car.pos.x, py - 0.8, pz - car.pos.z) < 2.25) { bestT = t; hitCar = car; hitPed = null; }
+    }
+    for (const c of G.colliders) {
+      // slab test against the box, capped at the current best
+      let tmin = 0, tmax = bestT;
+      const axes = [
+        [origin.x, dir.x, c.x0, c.x1],
+        [origin.z, dir.z, c.z0, c.z1],
+      ];
+      let ok = true;
+      for (const [o, d, lo, hi] of axes) {
+        if (Math.abs(d) < 1e-6) { if (o < lo || o > hi) { ok = false; break; } }
+        else {
+          let t1 = (lo - o) / d, t2 = (hi - o) / d;
+          if (t1 > t2) [t1, t2] = [t2, t1];
+          tmin = Math.max(tmin, t1);
+          tmax = Math.min(tmax, t2);
+          if (tmin > tmax) { ok = false; break; }
+        }
+      }
+      if (ok && tmin > 0.2 && tmin < bestT) { bestT = tmin; hitPed = null; hitCar = null; }
+    }
+    const end = origin.clone().addScaledVector(dir, bestT);
+    this.spawnTracer(origin, end);
+    if (hitPed) {
+      const died = hitPed.damage(spec.damage);
+      if (died) G.onPedKilled(hitPed, 'shot');
+      else if (hitPed.role === 'civil') hitPed.fleeFrom(origin.x, origin.z, G.time);
+    } else if (hitCar) {
+      hitCar.health -= spec.damage * 0.7;
+      if (hitCar.role === 'police' || hitCar.role === 'blockade') {
+        G.police.reportCrime('shotsHeard', hitCar.pos.x, hitCar.pos.z, G);
       }
     }
   }
 
-  hudState() {
-    const w = WEAPONS[this.current];
-    return {
-      weapon: w.name,
-      mag: w.mag === Infinity ? "—" : this.mag[this.current],
-      reserve: w.mag === Infinity ? "—" : this.reserve[this.current],
-      reloading: this.reloadTimer > 0,
-    };
-  }
-}
-
-function raySphere(origin, dir, center, radius) {
-  const ox = center.x - origin.x;
-  const oy = center.y - origin.y;
-  const oz = center.z - origin.z;
-  const t = ox * dir.x + oy * dir.y + oz * dir.z;
-  if (t < 0) return null;
-  const px = origin.x + dir.x * t;
-  const py = origin.y + dir.y * t;
-  const pz = origin.z + dir.z * t;
-  const d2 = (center.x - px) ** 2 + (center.y - py) ** 2 + (center.z - pz) ** 2;
-  if (d2 > radius * radius) return null;
-  return t;
-}
-
-function rayAabb(origin, dir, c) {
-  // Ground-plane slab test: the shot's height at the box is checked loosely
-  // (buildings are tall; a level shot always meets them).
-  let tmin = 0;
-  let tmax = Infinity;
-  const axes = [
-    [origin.x, dir.x, c.x0, c.x1],
-    [origin.z, dir.z, c.z0, c.z1],
-  ];
-  for (const [o, d, lo, hi] of axes) {
-    if (Math.abs(d) < 1e-9) {
-      if (o < lo || o > hi) return null;
-    } else {
-      let t1 = (lo - o) / d;
-      let t2 = (hi - o) / d;
-      if (t1 > t2) [t1, t2] = [t2, t1];
-      tmin = Math.max(tmin, t1);
-      tmax = Math.min(tmax, t2);
-      if (tmin > tmax) return null;
+  // Enemy fire: gang members in a fight and cops in a shooting stance.
+  // Accuracy falls off with range and with a moving, driving target.
+  updateHostiles(dt, G) {
+    if (G.mode !== 'playing') return;
+    for (const ped of G.peds) {
+      const hostile = (ped.role === 'gang' && ped.state === 'fight') || (ped.role === 'cop' && ped.state === 'shoot');
+      if (!hostile || ped.dead) continue;
+      ped.shootCd -= dt;
+      const dx = G.playerPos.x - ped.pos.x, dz = G.playerPos.z - ped.pos.z;
+      const dist = Math.hypot(dx, dz);
+      const range = ped.role === 'gang' ? 30 : 28;
+      if (ped.shootCd > 0 || dist > range) continue;
+      ped.shootCd = ped.role === 'gang' ? 0.85 + Math.random() * 0.7 : 1.05 + Math.random() * 0.75;
+      const from = ped.pos.clone(); from.y += 1.38;
+      const target = G.playerPos.clone(); target.y += 1.1;
+      let chance = ped.role === 'gang' ? 0.36 : 0.32;
+      chance *= THREE.MathUtils.clamp(1.15 - dist / range * 0.55, 0.4, 1);
+      if (G.playerInCar) chance *= 0.55;
+      else if (G.player.speedNow > 5) chance *= 0.6;
+      const hit = Math.random() < chance;
+      if (!hit) {
+        target.x += (Math.random() - 0.5) * 3.4;
+        target.z += (Math.random() - 0.5) * 3.4;
+        target.y += Math.random() * 0.8;
+      }
+      this.spawnTracer(from, target, 0xff9a7a);
+      G.audio.shot('pistol');
+      if (hit) G.damagePlayer(ped.role === 'gang' ? 6 + Math.random() * 5 : 5 + Math.random() * 5, 'shot');
     }
   }
-  return tmin;
 }

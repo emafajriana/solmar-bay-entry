@@ -1,50 +1,44 @@
-// SOLMAR BAY — the persistent save, kept in localStorage.
-//
-// One small record: the player's cash, how far the story has advanced,
-// which weapons are owned, and a handful of lifetime stats for the victory
-// screen. Anything unreadable falls back to a fresh save.
+// save.js — the persistent record, kept in localStorage: cash, story
+// progress, gun ownership, and the lifetime stats the victory screen
+// reads back. One small JSON object under one key; anything unreadable
+// falls back to a fresh start rather than breaking the title screen.
 
-const KEY = "solmar-bay-save-v1";
+import { SAVE_KEY } from './config.js';
 
-export function freshSave() {
+export function defaultSave() {
   return {
     cash: 250,
-    missionIndex: 0, // next story mission to offer
-    weapons: { pistol: false, shotgun: false, rifle: false },
-    stats: { steals: 0, knockouts: 0, missionsDone: 0, topStars: 0, playSeconds: 0 },
-    finished: false,
+    missionIndex: 0,
+    owned: { pistol: false, shotgun: false, rifle: false },
+    unlocked: { shotgun: false, rifle: false },
+    stats: { earned: 0, missionsDone: 0, steals: 0, busts: 0, wasteds: 0, playSeconds: 0 },
   };
 }
 
 export function loadSave() {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return freshSave();
+    const raw = window.localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
     const data = JSON.parse(raw);
-    const base = freshSave();
+    const base = defaultSave();
     return {
       ...base,
       ...data,
-      weapons: { ...base.weapons, ...(data.weapons || {}) },
-      stats: { ...base.stats, ...(data.stats || {}) },
+      owned: { ...base.owned, ...(data.owned ?? {}) },
+      unlocked: { ...base.unlocked, ...(data.unlocked ?? {}) },
+      stats: { ...base.stats, ...(data.stats ?? {}) },
     };
   } catch {
-    return freshSave();
+    return null;
   }
 }
 
-export function storeSave(save) {
+export function storeSave(data) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(save));
-  } catch {
-    // A full or blocked store should never break the game.
-  }
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch { /* private mode: the run just will not persist */ }
 }
 
-export function wipeSave() {
-  try {
-    localStorage.removeItem(KEY);
-  } catch {
-    // Nothing to wipe.
-  }
+export function clearSave() {
+  try { window.localStorage.removeItem(SAVE_KEY); } catch { /* nothing to clear */ }
 }

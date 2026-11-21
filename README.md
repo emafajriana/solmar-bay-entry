@@ -4,112 +4,107 @@
 
 # SOLMAR BAY
 
-An original open-world crime game that runs entirely in the browser. One
-sun-drenched coastal city, six districts, a fixer with a grudge, a rival gang
-that wants the docks, and a police force that remembers *where* you made your
-mess. Everything here — city, characters, story, art, sound — is original and
-built from scratch on Three.js. No downloads, no server, no network calls:
-open the page and play.
+A complete open-world crime game that runs in a desktop browser from
+static files. One procedural coastal city, six districts, traffic and
+crowds, stealable cars, an eight-mission story, and a wanted system with
+a twist: **the heat belongs to the district, not to you.** Everything —
+city, characters, story, art, sound — is original and built on Three.js.
+No server, no downloads, no network requests: open the page and play.
 
 ## The signature feature: District Heat
 
-Most wanted systems keep one global star rating. Solmar Bay doesn't. **Every
-district keeps its own heat.** Commit a crime in the Marina and the Marina
-heats up — patrols multiply there, the minimap flushes red there, and the
-stars over your head are read from the heat of the ground you are standing
-on. Duck two districts over into a quiet part of town and the hunt cools
-while the Marina is still boiling. Each district also cools at its own rate:
-Downtown's cameras hold a grudge, the Hills forget by sundown. Managing the
-map's heat — not just your stars — is the game.
+Solmar Bay keeps no global wanted level. Each of the six districts holds
+its own heat, 0–100, and your stars are read from the heat of the ground
+under your feet. Torch the Marina and the Marina boils — patrols double
+there, its streets flush red on the minimap — while the Hills stay
+sleepy and cool. Flee two districts over and the stars fall off you, but
+the hot district does not forget: it keeps its patrols, its colour, and
+its grudge, cooling at its own rate (Downtown's cameras are the slowest
+to forgive; the Hills forget by sundown). While a chase is live the PD
+radios ahead and the district you flee into warms too, so circling one
+block never works. The Pay'n'Spray is the legal exit: it washes the
+district you are standing in to zero and halves every other district.
 
-## What's in the city
+That one rule rewrites every chase, every route and every hideout in
+the game — the map itself is the wanted system.
 
-- **A full procedural city** — an 8×8 block grid with roads, sidewalks,
-  traffic lights, palms, billboards, a beach and open ocean to the south,
-  and a working container harbor.
-- **Six districts** — Downtown, Marina, Old Town, Industrial, Beachfront and
-  the Hills — each with its own look, building style and District Heat.
-- **On foot and behind the wheel** — third-person walking, running, jumping,
-  fists and firearms; steal any car you can reach, drive it, wreck it, get it
-  resprayed.
-- **Living traffic and crowds** — AI cars that obey traffic lights,
-  pedestrians who stroll the sidewalks and scatter when things go loud.
-- **Police that hunt by district** — patrol cars, foot cops, roadblocks at
-  high heat, bust and wasted states, and a Pay'n'Spray that launders your
-  heat for cash.
-- **An 8-mission story** — fixer Carmen "La Jefa" Duarte hires you to take
-  the bay back from Los Tiburones, from a first drive across town to the
-  assault on their headquarters.
-- **An economy** — mission pay, cash drops, a gun shop, a diner, a hospital,
-  and resprays that all cost money you have to earn.
-- **Synthesised audio** — engine hum, sirens, gunfire, jingles and an ambient
-  synthwave loop, all generated with WebAudio. No audio files.
-- **A save that sticks** — cash, story progress and lifetime stats persist in
-  the browser, with Continue on the title screen.
+### District Heat, in detail
+
+- **Heat is local.** Stealing a car adds 16 heat to the district you are
+  standing in; a hard crash 4; a punch 6; gunfire heard by a unit 8;
+  running someone down 22; a killing 40; killing an officer 55.
+- **Stars are a reading, not a record.** 8 heat is one star, 24 two,
+  42 three, 60 four, 80 the full five. Cross a border and the reading
+  changes with the ground — the heat itself stays where you made it.
+- **Districts cool at their own pace**, and only once you have been
+  quiet there for a while: Downtown holds heat longest (×0.55 rate),
+  then Marina (×0.8), Industrial (×0.9), Old Town (×1.0), Beachfront
+  (×1.15) and the Hills (×1.35). If the PD can see you in a district,
+  that district does not cool at all.
+- **A live chase leaks.** At two stars or more, with eyes on you, the
+  district you are fleeing into warms at 0.85 heat a second — the radio
+  is faster than you are.
+- **Response scales with the reading:** one patrol car at one star, two
+  at two, three at three, four at four, five at five. Foot officers
+  deploy from stopped cruisers from two stars, shoot from three, and
+  the roadblocks come out at four.
+- **The minimap tells the truth:** hot districts flush red in
+  proportion to their heat, patrols blink as blue dots, and the district
+  name, its heat bar and its radio station sit in the corner of the
+  HUD. La Perla's jukebox, the Marina's yacht rock and Downtown's city
+  pop are different stations because they are different places.
+
+## What is in the bay
+
+- **A procedural city** — an 8×8 block grid with working traffic lights,
+  palms, billboards, street furniture, a beach and open water to the
+  south, and a container harbour with a crane and a pier in the
+  south-east.
+- **Six districts** — Downtown, Marina, Old Town, Industrial,
+  Beachfront, the Hills — each with its own building stock, palette and
+  cooling rate.
+- **On foot and behind the wheel** — third-person walking, running,
+  jumping, fists and firearms; any car can be stolen, driven, wrecked
+  and resprayed.
+- **Living streets** — AI traffic that obeys the lights, pedestrians
+  who stroll the pavements and scatter when it gets loud.
+- **The Solmar PD** — pursuit cars that ram, foot cops who deploy from
+  stopped cruisers and arrest by proximity (or shoot from three stars),
+  roadblocks at four stars, bust and wasted states.
+- **An eight-mission story** — fixer Carmen "La Jefa" Duarte hires you
+  to take the bay back from Los Tiburones, from a first drive across
+  town to the storming of Club Tiburón.
+- **An economy** — mission pay and cash drops; a gun shop, a diner, a
+  hospital and the Pay'n'Spray all charge money you have to earn.
+- **Synthesised audio** — engine, sirens, gunfire, jingles and a quiet
+  synthwave pad, all WebAudio. There are no audio files.
+- **A save that sticks** — cash, story progress, guns and lifetime
+  stats persist in the browser; Continue waits on the title screen.
 
 ## How to play
 
-Serve the `game/` folder with any static file server (or run
-`node serve.ts` from this repo) and open it in a desktop browser.
+Serve the `game/` folder with any static file server — `node serve.ts`
+from this repo does it — and open it in a desktop browser.
 
 | Input | Action |
 | --- | --- |
 | W A S D | Move / drive |
 | Mouse | Look (click the game to lock the pointer) |
-| Shift | Run / boost |
+| Shift | Run |
 | Space | Jump / handbrake |
 | E | Enter or exit a car, talk, use a shop |
 | F | Punch |
 | Mouse click | Shoot (when armed) |
-| 1 / 2 / 3 | Fists / pistol / shotgun or rifle |
+| 1 / 2 / 3 / 4 | Fists / pistol / shotgun / rifle |
 | R | Reload |
 | P or Esc | Pause |
 
-## District Heat, in detail
-
-- **Heat is a place, not a person.** Each district holds 0–100 heat. Steal
-  a car in the Marina and the Marina gains heat; Downtown neither knows
-  nor cares.
-- **Stars are local.** Your wanted stars are read from the heat of the
-  district you are currently in: under 8 heat is a clean record, 84+ is a
-  five-star manhunt. Cross a district line into somewhere cool and the
-  stars fall off you — the hot district keeps its patrols and its colour
-  on the minimap.
-- **The PD radios ahead.** While a chase is live, the district you flee
-  into warms slowly, so running in circles around one block does not work.
-- **Districts cool at their own rates.** Heat fades once a district has
-  been quiet for a while — fastest in the Hills (2.2/s), slowest Downtown
-  (0.6/s), where the cameras remember. Cooling pauses while the police
-  have eyes on you, and hiding at a mission drop-off bleeds heat faster.
-- **Escalation follows the stars.** Two stars brings foot cops, three
-  brings gunfire, four brings roadblocks, five brings everything.
-- **The wash.** Shine Auto's Pay'n'Spray ($300) zeroes the heat of the
-  district you are in and halves every other district — the legal way to
-  cool a map that has gone red.
-
-Crimes and their heat: stealing a car 16 · hitting a pedestrian 22 ·
-killing 40 · killing an officer 55 · shots heard by police 8 · punching
-someone 6 · a hard crash 4.
-
-## The story
-
-Eight missions for Carmen "La Jefa" Duarte of La Perla bar, Marina:
-
-1. **Welcome to Solmar** ($200) — cross the Marina and meet the fixer.
-2. **Pizza Run** ($350) — a judge's pizza, delivered hot, Downtown.
-3. **Getaway Driver** ($600) — a crew, a score, a two-star escape.
-4. **Turf War** ($900) — five Tiburones in Beachfront who need evicting.
-5. **The Drop** ($1,200) — a package to the harbor, fast and quiet.
-6. **Repo Job** ($1,800) — repossess a sports car from the Hills, intact.
-7. **Harbor Heist** ($3,000) — clear the pier, then outrun the Industrial grid.
-8. **King of the Bay** ($5,000) — storm Club Tiburón and end the war.
-
 ## The hand-in
 
-`main.ts` is the entry program: it copies `game/` and `screenshots/` into
-the output directory and writes `dossier.json` with the vendored make.fun
-library, byte for byte the way the scorer builds it.
+`main.ts` is the entry program: it copies `game/` and `screenshots/`
+into the output directory and writes `dossier.json` with the vendored
+make.fun library, byte for byte the way the scorer builds it.
 
-An entry for the make.fun [gta6-01](https://make.fun/bounty/gta6-01)
-competition ("Make GTA 6"). All names, characters, story and art are
-original.
+An entry for the make.fun
+[gta6-01](https://make.fun/bounty/gta6-01) competition ("Make GTA 6").
+All names, characters, story and art are original.

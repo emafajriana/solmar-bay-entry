@@ -1,36 +1,37 @@
-// SOLMAR BAY — the hand-in program for this make.fun gta6-01 entry.
+// SOLMAR BAY — hand-in program for the make.fun gta6-01 bounty.
 //
-// What it does, in order:
-//   1. copies the playable game (game/) and its four renders (screenshots/)
-//      from this repository into the output directory;
-//   2. asks the vendored make.fun library to build the dossier of that
-//      output directory, with exactly the caps the bounty's scorer uses;
-//   3. writes the result to dossier.json in the output directory.
+// Run by the scorer under Node 22. It assembles the entry in the output
+// directory and describes it, in three moves:
 //
-// The output directory comes from MAKEFUN_OUTPUT_DIR when the grader sets
-// it, and defaults to /output. The program only ever reads paths relative
-// to its own file, so it can be run from any working directory and will
-// produce the same bytes every time.
+//   1. copy the playable game (game/) and the four staged screenshots
+//      (screenshots/) out of this repository, byte for byte;
+//   2. run the vendored make.fun library's buildDossier over that output
+//      tree with the caps the bounty publishes;
+//   3. write the library's answer to dossier.json in the output root.
+//
+// The output directory is MAKEFUN_OUTPUT_DIR when set, else /output. All
+// reads resolve relative to this file, never to the caller's working
+// directory, so the same repository produces the same dossier anywhere.
 
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDossier } from "./vendor/makefun-game.ts";
 
-const repoDir = dirname(fileURLToPath(import.meta.url));
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const here = dirname(fileURLToPath(import.meta.url));
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
-mkdirSync(outputDir, { recursive: true });
+mkdirSync(outDir, { recursive: true });
 for (const part of ["game", "screenshots"]) {
-  cpSync(join(repoDir, part), join(outputDir, part), { recursive: true });
+  cpSync(join(here, part), join(outDir, part), { recursive: true });
 }
 
-const dossier = buildDossier(outputDir, {
+const dossier = buildDossier(outDir, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
 });
 
-writeFileSync(join(outputDir, "dossier.json"), dossier);
-console.log(`solmar-bay: game + screenshots copied, dossier.json written (${dossier.byteLength} bytes)`);
+writeFileSync(join(outDir, "dossier.json"), dossier);
+console.log(`solmar-bay: copied game/ + screenshots/, dossier.json is ${dossier.byteLength} bytes`);

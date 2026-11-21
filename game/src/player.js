@@ -1,151 +1,94 @@
-// SOLMAR BAY — the player: an on-foot body, the car they are driving, and
-// the health that decides between the hospital and the wasted screen.
-//
-// Movement on foot is relative to the camera yaw the main loop passes in.
-// Cars are driven through the shared vehicle physics. The player mesh is
-// a simple figure — shirt, cap, swinging limbs — that hides itself while
-// its owner is behind a wheel.
+// player.js — the player's body on foot: third-person movement, running,
+// jumping, and the little box-person animation that sells it. While the
+// player drives, main.js hides this body in the car and moves the car
+// instead; health, cash and crimes live on the shared game state.
 
-import * as THREE from "three";
-import { input } from "./input.js";
-import { resolveCollisions } from "./city.js";
-import { EXTENT, HARBOR } from "./config.js";
-
-// The harbor pier deck is the one raised surface in the city.
-export function groundHeight(x, z) {
-  if (x > HARBOR.x - 60 && x < HARBOR.x + 60 && z > HARBOR.z - 26 && z < HARBOR.z + 70) return 1.6;
-  return 0;
-}
+import * as THREE from 'three';
+import { TUNING } from './config.js';
+import { makeHumanoid, animateHumanoid } from './pedestrians.js';
+import { collideCircle } from './city.js';
 
 export class Player {
-  constructor(scene, x, z) {
-    this.health = 100;
-    this.maxHealth = 100;
-    this.mode = "foot"; // foot | car
-    this.car = null;
-    this.angle = Math.PI; // facing north, up the street from the Marina
-    this.vy = 0;
-    this.height = 0;
-    this.lastHurtAt = -99;
-    this.walkPhase = 0;
-    this.dead = false;
-
-    const g = new THREE.Group();
-    const shirt = new THREE.MeshLambertMaterial({ color: 0xff7847 });
-    const skin = new THREE.MeshLambertMaterial({ color: 0xd9a066 });
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.74, 0.3), shirt);
-    torso.position.y = 1.07;
-    torso.castShadow = true;
-    g.add(torso);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 8), skin);
-    head.position.y = 1.69;
-    g.add(head);
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.24, 0.12, 10), new THREE.MeshLambertMaterial({ color: 0x20506e }));
-    cap.position.y = 1.86;
-    g.add(cap);
-    const legMat = new THREE.MeshLambertMaterial({ color: 0xf2ead8 });
-    this.legL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.74, 0.2), legMat);
-    this.legL.position.set(-0.14, 0.37, 0);
-    g.add(this.legL);
-    this.legR = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.74, 0.2), legMat);
-    this.legR.position.set(0.14, 0.37, 0);
-    g.add(this.legR);
-    const armGeo = new THREE.BoxGeometry(0.13, 0.62, 0.16);
-    this.armL = new THREE.Mesh(armGeo, shirt);
-    this.armL.position.set(-0.35, 1.09, 0);
-    g.add(this.armL);
-    this.armR = new THREE.Mesh(armGeo, shirt);
-    this.armR.position.set(0.35, 1.09, 0);
-    g.add(this.armR);
-    this.gunMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.52), new THREE.MeshLambertMaterial({ color: 0x14161a }));
-    this.gunMesh.position.set(0.35, 1.0, 0.3);
-    this.gunMesh.visible = false;
-    g.add(this.gunMesh);
-    g.position.set(x, 0, z);
-    scene.add(g);
-    this.mesh = g;
+  constructor(scene, rng) {
+    this.body = makeHumanoid(rng, { shirt: 0x1f8a8c, pants: 0x2c3440, skin: 0xc98a5e });
+    this.grp = this.body.grp;
+    scene.add(this.grp);
+    this.pos = this.grp.position;
+    this.pos.set(8, 0, 141);
+    this.velY = 0;
+    this.grounded = true;
+    this.angle = -Math.PI / 2; // facing west, toward the bar across the bay
+    this.phase = 0;
+    this.speedNow = 0;
+    this.inCar = null;
   }
 
-  get pos() {
-    return this.mesh.position;
+  placeAt(x, z, angle = 0) {
+    this.pos.set(x, 0, z);
+    this.angle = angle;
+    this.velY = 0;
   }
 
-  syncToCar() {
-    if (this.car) {
-      this.pos.copy(this.car.pos);
-      this.angle = this.car.angle;
-    }
-  }
+  // One fixed step of on-foot movement. camYaw is the camera's heading:
+  // W always walks away from the camera, like every third-person game.
+  update(dt, G) {
+    const input = G.input;
+    let ix = 0, iz = 0;
+    if (input.down('KeyW')) iz -= 1;
+    if (input.down('KeyS')) iz += 1;
+    if (input.down('KeyA')) ix -= 1;
+    if (input.down('KeyD')) ix += 1;
+    const moving = ix !== 0 || iz !== 0;
+    const running = input.down('ShiftLeft') || input.down('ShiftRight');
+    const speed = running ? TUNING.runSpeed : TUNING.walkSpeed;
 
-  hurt(amount, now) {
-    if (this.dead) return;
-    this.health = Math.max(0, this.health - amount);
-    this.lastHurtAt = now;
-  }
-
-  heal(amount) {
-    this.health = Math.min(this.maxHealth, this.health + amount);
-  }
-
-  update(dt, world, camYaw) {
-    // Slow recovery once the shooting stops.
-    if (!this.dead && world.time - this.lastHurtAt > 6 && this.health > 0) {
-      this.health = Math.min(this.maxHealth, this.health + 3.5 * dt);
-    }
-    if (this.mode === "car") {
-      this.syncToCar();
-      this.mesh.visible = false;
-      return;
-    }
-    this.mesh.visible = true;
-    let mx = 0;
-    let mz = 0;
-    if (input.down("KeyW")) mz += 1;
-    if (input.down("KeyS")) mz -= 1;
-    if (input.down("KeyA")) mx -= 1;
-    if (input.down("KeyD")) mx += 1;
-    const running = input.down("ShiftLeft") || input.down("ShiftRight");
-    const speed = running ? 8.8 : 5.4;
-    const moving = mx !== 0 || mz !== 0;
+    let vx = 0, vz = 0;
     if (moving) {
-      const len = Math.hypot(mx, mz);
-      const lx = mx / len;
-      const lz = mz / len;
-      // Camera-relative: W follows the camera's facing F = (sin, cos);
-      // D follows its right hand R = (-cos, sin).
-      const sin = Math.sin(camYaw);
-      const cos = Math.cos(camYaw);
-      const wx = lz * sin - lx * cos;
-      const wz = lz * cos + lx * sin;
-      const targetAngle = Math.atan2(wx, wz);
-      let diff = targetAngle - this.angle;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      this.angle += Math.max(-11 * dt, Math.min(11 * dt, diff));
-      this.pos.x += Math.sin(this.angle) * speed * dt * Math.max(0.25, Math.cos(diff));
-      this.pos.z += Math.cos(this.angle) * speed * dt * Math.max(0.25, Math.cos(diff));
-      resolveCollisions(this.pos, 0.5, world.colliders);
-      this.pos.x = Math.max(1, Math.min(EXTENT + 90, this.pos.x));
-      this.pos.z = Math.max(1, Math.min(920, this.pos.z));
-      this.walkPhase += dt * (running ? 11 : 7.5);
+      const len = Math.hypot(ix, iz);
+      const lx = ix / len, lz = iz / len;
+      const sin = Math.sin(G.camYaw), cos = Math.cos(G.camYaw);
+      // rotate the local move vector by the camera heading (three.js Y
+      // rotation): W ends up walking away from the camera, D to its right
+      vx = (lx * cos + lz * sin) * speed;
+      vz = (-lx * sin + lz * cos) * speed;
+      this.angle = Math.atan2(vx, vz);
     }
-    // Gravity and the jump.
-    const ground = groundHeight(this.pos.x, this.pos.z);
-    if ((input.pressed("Space")) && this.height <= ground + 0.01) {
-      this.vy = 5.4;
+    this.speedNow = moving ? speed : 0;
+    this.pos.x += vx * dt;
+    this.pos.z += vz * dt;
+
+    if (input.pressed('Space') && this.grounded) {
+      this.velY = TUNING.jumpSpeed;
+      this.grounded = false;
     }
-    this.vy -= 15 * dt;
-    this.height += this.vy * dt;
-    if (this.height < ground) {
-      this.height = ground;
-      this.vy = 0;
+    this.velY -= TUNING.gravity * dt;
+    this.pos.y += this.velY * dt;
+    if (this.pos.y <= 0) {
+      this.pos.y = 0;
+      this.velY = 0;
+      this.grounded = true;
     }
-    this.pos.y = this.height;
-    const swing = moving ? Math.sin(this.walkPhase) * 0.55 : 0;
-    this.legL.rotation.x = swing;
-    this.legR.rotation.x = -swing;
-    this.armL.rotation.x = -swing * 0.8;
-    this.armR.rotation.x = swing * 0.8;
-    this.mesh.rotation.y = this.angle;
+
+    collideCircle(this.pos, TUNING.playerRadius, G.colliders);
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, -196, 196);
+    this.pos.z = THREE.MathUtils.clamp(this.pos.z, -196, 292);
+
+    this.phase += dt * (moving ? speed * 1.9 : 0);
+    this.grp.rotation.y = this.angle;
+    animateHumanoid(this.body, this.phase, moving ? (running ? 1 : 0.7) : 0);
+    if (!moving) {
+      // settle the limbs when standing still
+      this.body.armL.rotation.x *= 0.8;
+      this.body.armR.rotation.x *= 0.8;
+      this.body.legL.rotation.x *= 0.8;
+      this.body.legR.rotation.x *= 0.8;
+    }
+    // aiming a gun holds the right arm out along the camera heading
+    if (G.aiming) {
+      this.body.armR.rotation.x = -Math.PI / 2 + 0.1;
+      this.grp.rotation.y = G.camYaw + Math.PI;
+    }
   }
+
+  setVisible(v) { this.grp.visible = v; }
 }

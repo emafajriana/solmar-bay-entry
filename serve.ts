@@ -1,21 +1,21 @@
-// SOLMAR BAY — a tiny local server for playing the game during development.
+// SOLMAR BAY — a pocket static server for playing the game locally.
 //
 //   node serve.ts [port]
 //
-// Serves the game/ folder at http://127.0.0.1:8077/ (or the port you pass).
-// Standard library only, no build step. The game itself is plain static
-// files; this exists so pointer lock and ES modules behave exactly the way
-// they do when the folder is hosted anywhere else.
+// Serves this repository over http://localhost so the game's ES modules
+// and import map load the way a browser demands (file:// will not do).
+// Development convenience only: the entry itself is the static game/
+// folder, hostable anywhere as-is. No dependencies, no build step.
 
 import { createServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
-import { dirname, extname, join, normalize } from "node:path";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const gameDir = join(dirname(fileURLToPath(import.meta.url)), "game");
-const port = Number(process.argv[2] ?? 8077);
+const root = fileURLToPath(new URL(".", import.meta.url));
+const port = Number(process.argv[2] ?? 8137);
 
-const MIME: Record<string, string> = {
+const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -23,25 +23,25 @@ const MIME: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".md": "text/markdown; charset=utf-8",
 };
 
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const rel = normalize(decodeURIComponent(url.pathname)).replace(/^[/\\]+/, "");
-    const file = join(gameDir, rel === "" ? "index.html" : rel);
-    if (!file.startsWith(gameDir)) throw new Error("outside game/");
-    const info = await stat(file);
-    if (!info.isFile()) throw new Error("not a file");
+    let path = normalize(decodeURIComponent(url.pathname));
+    if (path === "/" || path === "\\") path = "/game/index.html";
+    if (path.includes("..")) throw new Error("no traversal");
+    const file = join(root, path);
     const body = await readFile(file);
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+    res.writeHead(200, { "content-type": TYPES[extname(file)] ?? "application/octet-stream" });
     res.end(body);
   } catch {
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found\n");
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`solmar-bay: playing at http://127.0.0.1:${port}/`);
+server.listen(port, () => {
+  console.log(`solmar-bay: playing at http://localhost:${port}/`);
 });

@@ -1,380 +1,394 @@
-// SOLMAR BAY — cars: the mesh factory, the arcade physics every driver
-// shares, and the traffic brain that keeps the city moving.
+// vehicles.js — cars: the mesh factory, the arcade physics every driver
+// shares, and the two brains that move them when the player doesn't
+// (traffic following the road grid, police following the player).
 //
-// A car's heading is an angle whose forward vector is (sin a, cos a) in
-// the ground plane, so 0 faces south (toward the beach) and pi/2 faces
-// east. Traffic cars steer between waypoints placed on the right-hand
-// lane of each street, stop for red lights and for anything in front of
-// them, and pick a new exit at every intersection. The player and the
-// police drive the same physics with different hands on the wheel.
+// A car's heading `angle` uses the city convention: forward is
+// (sin(angle), cos(angle)). Traffic drives on the right: the lane offset
+// flips with direction, so two-way streets never head-on.
 
-import * as THREE from "three";
-import { streetCenter, PITCH, GRID, EXTENT } from "./config.js";
-import { resolveCollisions } from "./city.js";
+import * as THREE from 'three';
+import { ROAD_LINES, GRID } from './config.js';
+import { trafficPhase, collideCircle } from './city.js';
 
-export const CAR_COLORS = [0xd94f30, 0x2e6f9e, 0xe8b13c, 0xdad5c8, 0x3f9142, 0x74569c, 0x22262a, 0x9fb6c3, 0xc76b98];
-const KINDS = {
-  sedan: { top: 36, accel: 13, len: 4.3, wid: 1.85 },
-  sport: { top: 46, accel: 17, len: 4.2, wid: 1.8 },
-  taxi: { top: 34, accel: 12, len: 4.4, wid: 1.85 },
-  truck: { top: 27, accel: 9, len: 5.6, wid: 2.1 },
-  police: { top: 41, accel: 16, len: 4.5, wid: 1.9 },
-};
-
-const smokeTex = (() => {
+const PAINT = [0xd94f3d, 0x3d7bd9, 0xf2f0e6, 0x2b2f36, 0xe0a83c, 0x59a96a, 0x8a6fc9, 0xc0c6cc, 0x7a4a2b];
+const smokeTexture = (() => {
   let tex = null;
   return () => {
-    if (!tex) {
-      const c = document.createElement("canvas");
-      c.width = c.height = 64;
-      const g = c.getContext("2d");
-      const grad = g.createRadialGradient(32, 32, 4, 32, 32, 30);
-      grad.addColorStop(0, "rgba(90,90,90,0.55)");
-      grad.addColorStop(1, "rgba(90,90,90,0)");
-      g.fillStyle = grad;
-      g.fillRect(0, 0, 64, 64);
-      tex = new THREE.CanvasTexture(c);
-    }
+    if (tex) return tex;
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 4, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(70,70,70,0.55)');
+    grad.addColorStop(1, 'rgba(70,70,70,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    tex = new THREE.CanvasTexture(c);
     return tex;
   };
 })();
 
-class Smoke {
-  constructor(scene) {
-    this.pool = [];
-    for (let i = 0; i < 42; i++) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex(), transparent: true, opacity: 0 }));
-      s.scale.set(1.4, 1.4, 1);
-      s.visible = false;
-      scene.add(s);
-      this.pool.push({ s, life: 0 });
-    }
-    this.cursor = 0;
-  }
+export function makeCarMesh(rng, kind = 'car', paintColor = null) {
+  const grp = new THREE.Group();
+  const isPolice = kind === 'police';
+  const isSports = kind === 'sports';
+  const isTaxi = kind === 'taxi';
+  const paint = new THREE.MeshLambertMaterial({
+    color: paintColor ?? (isPolice ? 0xf2f3f5 : isTaxi ? 0xf2b234 : rng.pick(PAINT)),
+  });
+  const darkMat = new THREE.MeshLambertMaterial({ color: 0x1d2126 });
+  const glassMat = new THREE.MeshLambertMaterial({ color: 0x2c4256 });
+  const chromeMat = new THREE.MeshLambertMaterial({ color: 0xb9c1c9 });
 
-  puff(x, y, z) {
-    const p = this.pool[this.cursor++ % this.pool.length];
-    p.s.position.set(x, y, z);
-    p.s.visible = true;
-    p.life = 1;
+  const length = isSports ? 4.6 : 4.3;
+  const bodyH = isSports ? 0.42 : 0.55;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.82, bodyH, length), paint);
+  body.position.y = 0.42 + bodyH / 2;
+  body.castShadow = true;
+  grp.add(body);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.48, length * 0.48), isPolice ? darkMat : glassMat);
+  cabin.position.set(0, 0.42 + bodyH + 0.24, -0.18);
+  cabin.castShadow = true;
+  grp.add(cabin);
+  if (isSports) {
+    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.07, 0.4), darkMat);
+    spoiler.position.set(0, 1.06, -length / 2 + 0.25);
+    grp.add(spoiler);
   }
-
-  update(dt) {
-    for (const p of this.pool) {
-      if (p.life <= 0) continue;
-      p.life -= dt * 0.7;
-      p.s.position.y += dt * 2.2;
-      const k = 1 - Math.max(0, p.life);
-      p.s.scale.set(1.4 + k * 2.6, 1.4 + k * 2.6, 1);
-      p.s.material.opacity = Math.max(0, p.life) * 0.5;
-      if (p.life <= 0) p.s.visible = false;
-    }
+  if (isTaxi) {
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.18, 0.3),
+      new THREE.MeshBasicMaterial({ color: 0xffe27a }));
+    sign.position.set(0, 1.32, -0.18);
+    grp.add(sign);
   }
+  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.26, 12);
+  const wheels = [], frontWheels = [];
+  for (const [wx, wz] of [[-0.85, 1.35], [0.85, 1.35], [-0.85, -1.35], [0.85, -1.35]]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(wx, 0.36, wz);
+    const wheel = new THREE.Mesh(wheelGeo, darkMat);
+    wheel.rotation.z = Math.PI / 2;
+    pivot.add(wheel);
+    grp.add(pivot);
+    wheels.push(wheel);
+    if (wz > 0) frontWheels.push(pivot);
+  }
+  const lightGeo = new THREE.BoxGeometry(0.34, 0.12, 0.06);
+  for (const dx of [-0.55, 0.55]) {
+    const hl = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: 0xfff6cf }));
+    hl.position.set(dx, 0.72, length / 2 + 0.02);
+    grp.add(hl);
+    const tl = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: 0xd92b1a }));
+    tl.position.set(dx, 0.74, -length / 2 - 0.02);
+    grp.add(tl);
+  }
+  let lightL = null, lightR = null;
+  if (isPolice) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.14, 0.5), darkMat);
+    bar.position.set(0, 1.36, -0.18);
+    grp.add(bar);
+    lightL = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.16, 0.44), new THREE.MeshBasicMaterial({ color: 0xff2a1a }));
+    lightL.position.set(-0.33, 1.38, -0.18);
+    grp.add(lightL);
+    lightR = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.16, 0.44), new THREE.MeshBasicMaterial({ color: 0x2a6aff }));
+    lightR.position.set(0.33, 1.38, -0.18);
+    grp.add(lightR);
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.84, 0.2, length * 0.7), darkMat);
+    stripe.position.y = 0.62;
+    grp.add(stripe);
+  }
+  const smoke = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTexture(), transparent: true, opacity: 0.85 }));
+  smoke.position.set(0, 1.5, length / 2 - 0.4);
+  smoke.scale.set(1.6, 1.2, 1);
+  smoke.visible = false;
+  grp.add(smoke);
+  return { grp, wheels, frontWheels, lightL, lightR, smoke };
 }
 
-let smoke = null;
-export function initSmoke(scene) {
-  smoke = new Smoke(scene);
-}
-export function updateSmoke(dt) {
-  if (smoke) smoke.update(dt);
-}
+let carSeq = 0;
 
 export class Car {
-  constructor(scene, { kind = "sedan", color = 0xdad5c8, x = 0, z = 0, angle = 0, mode = "parked" }) {
+  constructor(scene, rng, { kind = 'car', x = 0, z = 0, angle = 0, role = 'parked', paint = null } = {}) {
+    this.id = ++carSeq;
     this.kind = kind;
-    this.spec = KINDS[kind];
-    this.mode = mode; // parked | traffic | police | player
+    const parts = makeCarMesh(rng, kind, paint);
+    this.grp = parts.grp;
+    this.wheels = parts.wheels;
+    this.frontWheels = parts.frontWheels;
+    this.lightL = parts.lightL;
+    this.lightR = parts.lightR;
+    this.smoke = parts.smoke;
+    this.grp.position.set(x, 0, z);
+    scene.add(this.grp);
+    this.pos = this.grp.position;
     this.angle = angle;
     this.speed = 0;
-    this.health = 100;
     this.steerVis = 0;
-    this.smokeAcc = 0;
-    this.waypoint = null;
-    this.waitAt = null;
-    this.reverseTimer = 0;
-
-    const g = new THREE.Group();
-    const paint = new THREE.MeshLambertMaterial({ color });
-    const dark = new THREE.MeshLambertMaterial({ color: 0x1d2126 });
-    const glass = new THREE.MeshLambertMaterial({ color: 0x2c4256 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(this.spec.wid, 0.62, this.spec.len), paint);
-    body.position.y = 0.62;
-    body.castShadow = true;
-    g.add(body);
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(this.spec.wid * 0.86, 0.55, this.spec.len * 0.48), glass);
-    cabin.position.set(0, 1.18, -this.spec.len * 0.05);
-    cabin.castShadow = true;
-    g.add(cabin);
-    this.wheels = [];
-    const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.26, 10);
-    wheelGeo.rotateZ(Math.PI / 2);
-    for (const [wx, wz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]]) {
-      const w = new THREE.Mesh(wheelGeo, dark);
-      w.position.set(wx * (this.spec.wid / 2 - 0.05), 0.36, wz * (this.spec.len / 2 - 0.85));
-      g.add(w);
-      this.wheels.push(w);
-    }
-    const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff2b0 });
-    for (const sx of [-0.6, 0.6]) {
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.06), lampMat);
-      lamp.position.set(sx, 0.66, this.spec.len / 2 + 0.02);
-      g.add(lamp);
-    }
-    if (kind === "police") {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.16, 0.5), dark);
-      bar.position.set(0, 1.55, -0.2);
-      g.add(bar);
-      this.lightL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.44), new THREE.MeshBasicMaterial({ color: 0xff2a20 }));
-      this.lightL.position.set(-0.32, 1.56, -0.2);
-      g.add(this.lightL);
-      this.lightR = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.44), new THREE.MeshBasicMaterial({ color: 0x2255ff }));
-      this.lightR.position.set(0.32, 1.56, -0.2);
-      g.add(this.lightR);
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(this.spec.wid + 0.02, 0.3, this.spec.len * 0.7), new THREE.MeshLambertMaterial({ color: 0xf2f2f2 }));
-      stripe.position.y = 0.66;
-      g.add(stripe);
-    }
-    if (kind === "taxi") {
-      const sign = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.34), new THREE.MeshBasicMaterial({ color: 0xffd94d }));
-      sign.position.set(0, 1.58, -0.2);
-      g.add(sign);
-    }
-    g.position.set(x, 0, z);
-    g.rotation.y = angle;
-    scene.add(g);
-    this.mesh = g;
+    this.health = 100;
+    this.role = role;
+    this.occupied = role === 'traffic'; // an NPC driver is inside
+    this.deployed = false;              // police: foot cops already out
+    this.cruise = rng.bell(8.5, 12.5);
+    this.route = null;                  // traffic: {axis, dir, line}
+    this.maxSpeed = kind === 'sports' ? 33 : kind === 'police' ? 31 : 26;
+    this.accel = kind === 'sports' ? 16.5 : kind === 'police' ? 15.5 : 13;
+    this.lastCrashAt = -9;
   }
 
-  get pos() {
-    return this.mesh.position;
-  }
+  forward() { return { x: Math.sin(this.angle), z: Math.cos(this.angle) }; }
 
-  forward() {
-    return { x: Math.sin(this.angle), z: Math.cos(this.angle) };
-  }
+  // The shared arcade step. throttle -1..1, steer -1..1 (left positive).
+  physics(dt, G, throttle, steer, handbrake) {
+    if (this.health <= 0) throttle = 0; // a wrecked engine does not pull
+    const drag = handbrake ? 3.4 : 0.55;
+    if (throttle > 0) this.speed += this.accel * throttle * dt * (this.speed < 0 ? 2.2 : 1);
+    else if (throttle < 0) this.speed += this.accel * 1.4 * throttle * dt * (this.speed > 0.5 ? 2.4 : 0.8);
+    this.speed -= this.speed * drag * dt;
+    if (!handbrake && Math.abs(throttle) < 0.01) this.speed -= Math.sign(this.speed) * Math.min(Math.abs(this.speed), 1.6 * dt);
+    this.speed = THREE.MathUtils.clamp(this.speed, -8.5, this.maxSpeed);
 
-  // Shared movement: advance along the heading, resolve building and car
-  // collisions, animate the mesh. `events` collects crashes for the caller.
-  step(dt, world, events) {
-    const prev = { x: this.pos.x, z: this.pos.z };
+    const steerTarget = steer * 0.62 * (1 - Math.min(0.55, Math.abs(this.speed) / this.maxSpeed * 0.6));
+    this.steerVis += (steerTarget - this.steerVis) * Math.min(1, dt * 7);
+    if (Math.abs(this.speed) > 0.05) {
+      this.angle += this.steerVis * this.speed * dt * 0.34 * (this.speed < 0 ? -1 : 1);
+    }
     const f = this.forward();
     this.pos.x += f.x * this.speed * dt;
     this.pos.z += f.z * this.speed * dt;
-    const impact = resolveCollisions(this.pos, 1.7, world.colliders, prev);
-    if (impact > 0.4 && Math.abs(this.speed) > 3) {
-      const dmg = impact * Math.abs(this.speed) * 0.55;
-      this.health = Math.max(0, this.health - dmg);
-      events.push({ type: "crash", car: this, amount: dmg, x: this.pos.x, z: this.pos.z });
-      this.speed = -this.speed * 0.22;
-    }
-    // Car-to-car: soft circles, a shared shove and mutual damage.
-    for (const other of world.cars) {
-      if (other === this) continue;
-      const dx = this.pos.x - other.pos.x;
-      const dz = this.pos.z - other.pos.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 < 16 && d2 > 0.0001) {
-        const d = Math.sqrt(d2);
-        const push = (4 - d) / 2;
-        const nx = dx / d;
-        const nz = dz / d;
-        this.pos.x += nx * push;
-        this.pos.z += nz * push;
-        other.pos.x -= nx * push;
-        other.pos.z -= nz * push;
-        const rel = Math.abs(this.speed - other.speed);
-        if (rel > 4) {
-          const dmg = rel * 1.1;
-          this.health = Math.max(0, this.health - dmg);
-          other.health = Math.max(0, other.health - dmg);
-          events.push({ type: "carHit", car: this, other, amount: dmg, x: this.pos.x, z: this.pos.z });
-          this.speed *= 0.55;
-          other.speed *= 0.55;
+
+    // body vs the built world: nose and tail as two circles
+    const before = Math.abs(this.speed);
+    for (const s of [1.35, -1.35]) {
+      const probe = { x: this.pos.x + f.x * s, z: this.pos.z + f.z * s };
+      if (collideCircle(probe, 1.02, G.colliders)) {
+        this.pos.x += probe.x - (this.pos.x + f.x * s);
+        this.pos.z += probe.z - (this.pos.z + f.z * s);
+        if (before > 5.5 && G.time - this.lastCrashAt > 0.5) {
+          this.lastCrashAt = G.time;
+          G.onCarCrash(this, before);
+          this.speed = -this.speed * 0.22;
+        } else if (before > 0.5) {
+          this.speed *= 0.4;
         }
       }
     }
-    this.pos.x = Math.max(-30, Math.min(EXTENT + 30, this.pos.x));
-    this.pos.z = Math.max(-30, Math.min(900, this.pos.z));
-    this.mesh.rotation.y = this.angle;
-    const spin = (this.speed * dt) / 0.36;
+    this.pos.x = THREE.MathUtils.clamp(this.pos.x, -192, 192);
+    this.pos.z = THREE.MathUtils.clamp(this.pos.z, -192, 233);
+
+    this.grp.position.y = 0;
+    this.grp.rotation.y = this.angle;
+    const spin = this.speed * dt / 0.36;
     for (const w of this.wheels) w.rotation.x += spin;
-    if (this.wheels[0]) {
-      this.wheels[0].rotation.y = this.steerVis;
-      this.wheels[1].rotation.y = this.steerVis;
+    for (const p of this.frontWheels) p.rotation.y = this.steerVis * 0.9;
+    this.smoke.visible = this.health < 55;
+    if (this.smoke.visible) {
+      const s = 1.3 + Math.sin(G.time * 7 + this.id) * 0.35 + (55 - this.health) * 0.02;
+      this.smoke.scale.set(s, s * 0.8, 1);
     }
-    if (this.health < 45 && smoke) {
-      this.smokeAcc += dt * (this.health < 20 ? 9 : 4);
-      while (this.smokeAcc > 1) {
-        this.smokeAcc -= 1;
-        smoke.puff(this.pos.x, 1.2, this.pos.z);
+  }
+
+  // --- traffic brain: follow the lane, mind the lights and the car ahead ---
+  trafficInputs(dt, G) {
+    if (!this.route) {
+      const axis = Math.abs(this.forward().x) > Math.abs(this.forward().z) ? 'x' : 'z';
+      this.route = {
+        axis,
+        dir: axis === 'x' ? Math.sign(this.forward().x) || 1 : Math.sign(this.forward().z) || 1,
+        line: axis === 'x' ? this.nearestLine(this.pos.z) : this.nearestLine(this.pos.x),
+      };
+    }
+    const r = this.route;
+    const along = r.axis === 'x' ? this.pos.x : this.pos.z;
+    const cross = r.axis === 'x' ? this.pos.z : this.pos.x;
+    const lane = r.line + (r.axis === 'x' ? 3.4 * r.dir : -3.4 * r.dir);
+
+    // approaching the next intersection: maybe turn onto the crossing road
+    const nextJunction = this.nextLineAhead(along, r.dir);
+    if (nextJunction !== null && Math.abs(nextJunction - along) < 1.2 && G.rng.chance(0.3)) {
+      const turnDir = G.rng.pick([-1, 1]);
+      r.line = nextJunction;
+      if (r.axis === 'x') { r.axis = 'z'; r.dir = turnDir; }
+      else { r.axis = 'x'; r.dir = turnDir; }
+    }
+
+    // lookahead point on the lane, steered toward like a carrot
+    const lookAhead = 11;
+    const tx = r.axis === 'x' ? along + r.dir * lookAhead : lane;
+    const tz = r.axis === 'x' ? lane : along + r.dir * lookAhead;
+    const want = Math.atan2(tx - this.pos.x, tz - this.pos.z);
+    let diff = want - this.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    const steer = THREE.MathUtils.clamp(diff * 1.5, -1, 1);
+
+    // reasons to slow: red light ahead, a car ahead, a person ahead
+    let target = this.cruise;
+    const phase = trafficPhase(G.time);
+    const myGreen = (r.axis === 'z' && phase.startsWith('NS')) || (r.axis === 'x' && phase.startsWith('EW'));
+    if (!myGreen && nextJunction !== null) {
+      const d = (nextJunction - along) * r.dir;
+      if (d > 0 && d < 10) target = 0;
+    }
+    for (const other of G.cars) {
+      if (other === this) continue;
+      const dx = other.pos.x - this.pos.x, dz = other.pos.z - this.pos.z;
+      const ahead = dx * Math.sin(this.angle) + dz * Math.cos(this.angle);
+      const side = Math.abs(dx * Math.cos(this.angle) - dz * Math.sin(this.angle));
+      if (ahead > 0 && ahead < 8 && side < 1.8) target = Math.min(target, Math.max(0, (ahead - 4.5) * 1.6));
+    }
+    if (Math.abs(cross - lane) > 6) target = Math.min(target, 6);
+    const throttle = this.speed < target ? 0.75 : -0.4;
+    return { throttle, steer, handbrake: target === 0 && this.speed > 1 };
+  }
+
+  // --- pursuit brain: get to the player, stay on them ---
+  pursuitInputs(dt, G) {
+    const target = G.playerPos;
+    const dx = target.x - this.pos.x, dz = target.z - this.pos.z;
+    const dist = Math.hypot(dx, dz);
+    const lead = G.playerInCar ? 0.45 : 0.1;
+    const px = target.x + (G.playerVel?.x ?? 0) * lead;
+    const pz = target.z + (G.playerVel?.z ?? 0) * lead;
+    const want = Math.atan2(px - this.pos.x, pz - this.pos.z);
+    let diff = want - this.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    const steer = THREE.MathUtils.clamp(diff * 1.7, -1, 1);
+    let throttle = 1;
+    if (!G.playerInCar && dist < 5.5) throttle = dist < 3.2 ? -0.2 : 0.25; // pull up, cops get out
+    if (Math.abs(diff) > 2.4 && this.speed > 4) throttle = -0.6;          // turned around: brake and swing
+    if (this.health <= 0) throttle = 0;
+    return { throttle, steer, handbrake: false };
+  }
+
+  nearestLine(v) {
+    return ROAD_LINES.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a));
+  }
+
+  nextLineAhead(along, dir) {
+    let best = null;
+    for (const line of ROAD_LINES) {
+      const d = (line - along) * dir;
+      if (d > 0.5 && (best === null || d < best.d)) best = { line, d };
+    }
+    return best ? best.line : null;
+  }
+
+  update(dt, G) {
+    if (this.role === 'traffic') {
+      const { throttle, steer, handbrake } = this.trafficInputs(dt, G);
+      this.physics(dt, G, throttle, steer, handbrake);
+    } else if (this.role === 'police') {
+      const { throttle, steer, handbrake } = this.pursuitInputs(dt, G);
+      this.physics(dt, G, throttle, steer, handbrake);
+    } else if (this.role === 'player') {
+      const input = G.input;
+      const throttle = (input.down('KeyW') ? 1 : 0) + (input.down('KeyS') ? -1 : 0);
+      const steer = (input.down('KeyA') ? 1 : 0) + (input.down('KeyD') ? -1 : 0);
+      this.physics(dt, G, throttle, steer, input.down('Space'));
+    }
+    if (this.lightL && this.lightR) {
+      const flash = Math.floor(G.time * 5 + this.id) % 2 === 0;
+      this.lightL.material.color.setHex(flash ? 0xff2a1a : 0x57120c);
+      this.lightR.material.color.setHex(flash ? 0x1c3f7a : 0x2a6aff);
+    }
+  }
+}
+
+export class Fleet {
+  constructor(scene, rng) {
+    this.scene = scene;
+    this.rng = rng;
+    this.cars = [];
+  }
+
+  add(car) { this.cars.push(car); return car; }
+
+  spawnTraffic(count) {
+    const rng = this.rng;
+    for (let i = 0; i < count; i++) {
+      const horizontal = rng.chance(0.5);
+      const line = rng.pick(ROAD_LINES.slice(1, -1));
+      const along = rng.range(-170, 170);
+      const dir = rng.pick([-1, 1]);
+      const x = horizontal ? along : line + 3.4 * -dir;
+      const z = horizontal ? line + 3.4 * dir : along;
+      const angle = horizontal ? (dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (dir > 0 ? 0 : Math.PI);
+      const kind = rng.chance(0.14) ? 'taxi' : rng.chance(0.16) ? 'sports' : 'car';
+      this.add(new Car(this.scene, rng, { kind, x, z, angle, role: 'traffic' }));
+    }
+  }
+
+  spawnParked(count) {
+    const rng = this.rng;
+    for (let i = 0; i < count; i++) {
+      const horizontal = rng.chance(0.5);
+      const line = rng.pick(ROAD_LINES.slice(1, -1));
+      const along = rng.range(-168, 168);
+      const side = rng.pick([-1, 1]);
+      const off = (GRID.roadHalf + 2.1) * side;
+      const x = horizontal ? along : line + off;
+      const z = horizontal ? line + off : along;
+      const angle = horizontal ? (side > 0 ? -Math.PI / 2 : Math.PI / 2) : (side > 0 ? Math.PI : 0);
+      const kind = rng.chance(0.12) ? 'sports' : 'car';
+      this.add(new Car(this.scene, rng, { kind, x, z, angle, role: 'parked' }));
+    }
+    // the player's first ride: a sedan stopped in the westbound lane of
+    // the coast road, straight ahead of the spawn point, nose west
+    const first = new Car(this.scene, rng, { kind: 'car', x: -12, z: 141.4, angle: -Math.PI / 2, role: 'parked' });
+    this.add(first);
+    return first;
+  }
+
+  spawnPolice(x, z) {
+    const angle = Math.atan2(-x, -z);
+    return this.add(new Car(this.scene, this.rng, { kind: 'police', x, z, angle, role: 'police' }));
+  }
+
+  // The Repo Job target: a gold sports car, parked, waiting to be stolen.
+  spawnSports(x, z, angle) {
+    return this.add(new Car(this.scene, this.rng, { kind: 'sports', x, z, angle, role: 'parked', paint: 0xe8b13c }));
+  }
+
+  remove(car) {
+    const i = this.cars.indexOf(car);
+    if (i !== -1) this.cars.splice(i, 1);
+    this.scene.remove(car.grp);
+  }
+
+  update(dt, G) {
+    for (const car of this.cars) car.update(dt, G);
+    // car-to-car bumps and car-to-pedestrian hits, resolved once per step
+    for (let i = 0; i < this.cars.length; i++) {
+      const a = this.cars[i];
+      for (let j = i + 1; j < this.cars.length; j++) {
+        const b = this.cars[j];
+        const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > 0.01 && d2 < 3.1 * 3.1) {
+          const d = Math.sqrt(d2);
+          const push = (3.1 - d) / 2;
+          const nx = dx / d, nz = dz / d;
+          if (a.role !== 'parked') { a.pos.x -= nx * push; a.pos.z -= nz * push; }
+          if (b.role !== 'parked') { b.pos.x += nx * push; b.pos.z += nz * push; }
+          const closing = Math.abs(a.speed) + Math.abs(b.speed);
+          if (closing > 7 && G.time - Math.max(a.lastCrashAt, b.lastCrashAt) > 0.6) {
+            a.lastCrashAt = b.lastCrashAt = G.time;
+            G.onCarCrash(a.speed !== 0 ? a : b, closing * 0.7);
+            a.speed *= 0.35; b.speed *= 0.35;
+          }
+        }
+      }
+      for (const ped of G.peds) {
+        if (ped.dead) continue;
+        const dx = ped.pos.x - a.pos.x, dz = ped.pos.z - a.pos.z;
+        if (dx * dx + dz * dz < 2.05 * 2.05 && Math.abs(a.speed) > 2.2) {
+          const f = a.forward();
+          ped.pos.x += f.x * 2.4;
+          ped.pos.z += f.z * 2.4;
+          G.onPedHit(ped, a, Math.abs(a.speed));
+        }
       }
     }
-    if (this.lightL) {
-      const on = Math.floor(world.time * 3) % 2 === 0;
-      this.lightL.material.color.setHex(on ? 0xff2a20 : 0x551512);
-      this.lightR.material.color.setHex(on ? 0x112a66 : 0x2255ff);
-    }
   }
-
-  // Player/police hands: throttle -1..1, steer -1..1.
-  drive(dt, throttle, steer, handbrake) {
-    const spec = this.spec;
-    if (this.health <= 0) throttle = 0;
-    if (throttle > 0) this.speed += spec.accel * throttle * dt * (this.speed < 0 ? 2.2 : 1);
-    else if (throttle < 0) {
-      if (this.speed > 0.5) this.speed += 26 * throttle * dt;
-      else this.speed = Math.max(-9, this.speed + spec.accel * 0.7 * throttle * dt);
-    }
-    const drag = 0.35 + Math.abs(this.speed) * 0.012;
-    this.speed -= this.speed * drag * dt * 0.28;
-    if (handbrake) this.speed -= this.speed * 2.4 * dt;
-    this.speed = Math.min(spec.top, Math.max(-9, this.speed));
-    if (Math.abs(this.speed) < 0.02 && throttle === 0) this.speed = 0;
-    const turn = 2.0 / (1 + Math.abs(this.speed) * 0.05);
-    this.angle += steer * turn * dt * (this.speed >= 0 ? 1 : -1) * Math.min(1, Math.abs(this.speed) / 4 + 0.15);
-    this.steerVis = steer * 0.45;
-  }
-}
-
-// --- traffic -------------------------------------------------------------
-// A traffic car always has a waypoint: the next intersection exit on its
-// lane. Reaching it means choosing the next exit (straight, left or right,
-// never a U-turn unless the street ends).
-
-function lanePoint(streetIdx, axis, dir, along) {
-  // The point on the right-hand lane of a street, `along` metres along it.
-  const c = streetCenter(streetIdx);
-  if (axis === "z") return { x: c - dir * 3.4, z: along };
-  return { x: along, z: c + dir * 3.4 };
-}
-
-export function seedTrafficCar(car, rng) {
-  const axis = rng.chance(0.5) ? "z" : "x";
-  const streetIdx = rng.int(0, GRID);
-  const dir = rng.chance(0.5) ? 1 : -1;
-  const along = rng.range(30, EXTENT - 30);
-  const p = lanePoint(streetIdx, axis, dir, along);
-  car.pos.x = p.x;
-  car.pos.z = p.z;
-  car.angle = axis === "z" ? (dir > 0 ? 0 : Math.PI) : dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-  car.traffic = { axis, dir, streetIdx };
-  chooseWaypoint(car, rng, along);
-}
-
-function chooseWaypoint(car, rng, fromAlong) {
-  const t = car.traffic;
-  // The next intersection along the direction of travel.
-  let best = null;
-  for (let k = 0; k <= GRID; k++) {
-    const c = streetCenter(k);
-    const d = (c - fromAlong) * t.dir;
-    if (d > 6 && (best === null || d < best.d)) best = { k, c, d };
-  }
-  if (!best) {
-    // Street's end: turn around.
-    t.dir *= -1;
-    car.angle += Math.PI;
-    chooseWaypoint(car, rng, fromAlong);
-    return;
-  }
-  t.nextCross = best.k;
-  t.crossAlong = best.c;
-  const alongNow = t.axis === "z" ? car.pos.z : car.pos.x;
-  const exit = lanePoint(t.streetIdx, t.axis, t.dir, best.c + t.dir * 30);
-  exit.x = t.axis === "z" ? exit.x : best.c + t.dir * 30;
-  exit.z = t.axis === "z" ? best.c + t.dir * 30 : exit.z;
-  car.waypoint = exit;
-  car.crossDecided = false;
-  void alongNow;
-}
-
-function decideAtCross(car, rng) {
-  const t = car.traffic;
-  const crossIdx = t.nextCross;
-  const options = ["straight"];
-  // Turning swaps the axis: the new street is the one we are crossing.
-  options.push("left", "right");
-  let choice = rng.pick(options);
-  if (crossIdx === 0 || crossIdx === GRID) choice = "straight";
-  if (choice === "straight") {
-    const fromAlong = t.axis === "z" ? car.pos.z : car.pos.x;
-    chooseWaypoint(car, rng, fromAlong + t.dir * 2);
-    return;
-  }
-  const oldAxis = t.axis;
-  // Heading after the turn, from the current forward vector: a left turn
-  // rotates the heading by +90 degrees, which in (sin a, cos a) terms maps
-  // the forward (x, z) to (z, -x).
-  const f = { x: Math.sin(car.angle), z: Math.cos(car.angle) };
-  const left = { x: f.z, z: -f.x };
-  const turnVec = choice === "left" ? left : { x: -left.x, z: -left.z };
-  const newAngle = Math.atan2(turnVec.x, turnVec.z);
-  car.angle = newAngle;
-  t.axis = oldAxis === "z" ? "x" : "z";
-  t.streetIdx = crossIdx;
-  t.dir = t.axis === "z" ? Math.sign(turnVec.z) : Math.sign(turnVec.x);
-  const fromAlong = t.axis === "z" ? car.pos.z : car.pos.x;
-  chooseWaypoint(car, rng, fromAlong);
-}
-
-export function updateTraffic(car, dt, world, rng) {
-  if (!car.traffic) seedTrafficCar(car, rng);
-  const t = car.traffic;
-  const wp = car.waypoint;
-  const dx = wp.x - car.pos.x;
-  const dz = wp.z - car.pos.z;
-  const dist = Math.hypot(dx, dz);
-  const targetAngle = Math.atan2(dx, dz);
-  let diff = targetAngle - car.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  const steer = Math.max(-1, Math.min(1, diff * 2.2));
-  car.angle += steer * 1.7 * dt * Math.min(1, Math.abs(car.speed) / 5 + 0.2);
-  car.steerVis = steer * 0.4;
-
-  // Decide the exit shortly before the crossing, so the waypoint the car
-  // steers for already bends the right way.
-  const along = t.axis === "z" ? car.pos.z : car.pos.x;
-  const toCross = (t.crossAlong - along) * t.dir;
-  if (!car.crossDecided && toCross < 26 && toCross > -4) {
-    car.crossDecided = true;
-    decideAtCross(car, rng);
-  }
-  if (dist < 5) {
-    const fromAlong = t.axis === "z" ? car.pos.z : car.pos.x;
-    chooseWaypoint(car, rng, fromAlong);
-  }
-
-  // Stop lines and neighbours.
-  let target = 11;
-  const light = world.lightPhase(t.axis, world.time);
-  if ((light === "red" || (light === "amber" && toCross < 10)) && toCross > 2 && toCross < 16) target = 0;
-  const f = car.forward();
-  for (const other of world.cars) {
-    if (other === car) continue;
-    const ox = other.pos.x - car.pos.x;
-    const oz = other.pos.z - car.pos.z;
-    const ahead = ox * f.x + oz * f.z;
-    const side = Math.abs(ox * -f.z + oz * f.x);
-    if (ahead > 0 && ahead < 11 && side < 2.8) target = Math.min(target, other.speed > 0 ? other.speed * 0.8 : 0);
-  }
-  if (world.playerPos) {
-    const ox = world.playerPos.x - car.pos.x;
-    const oz = world.playerPos.z - car.pos.z;
-    const ahead = ox * f.x + oz * f.z;
-    const side = Math.abs(ox * -f.z + oz * f.x);
-    if (ahead > 0 && ahead < 8 && side < 2.4) target = 0;
-  }
-  for (const ped of world.peds) {
-    if (ped.down) continue;
-    const ox = ped.pos.x - car.pos.x;
-    const oz = ped.pos.z - car.pos.z;
-    const ahead = ox * f.x + oz * f.z;
-    const side = Math.abs(ox * -f.z + oz * f.x);
-    if (ahead > 0 && ahead < 9 && side < 2.6) target = 0;
-  }
-  if (car.speed < target) car.speed = Math.min(target, car.speed + car.spec.accel * 0.7 * dt);
-  else car.speed = Math.max(target, car.speed - 22 * dt);
-  if (car.health <= 0) car.speed = Math.max(0, car.speed - 20 * dt);
 }

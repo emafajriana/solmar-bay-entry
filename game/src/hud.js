@@ -1,232 +1,205 @@
-// SOLMAR BAY — the HUD and the screens.
-//
-// Everything the player reads lives in the DOM above the canvas: health,
-// cash, the clock, the wanted stars, the current district and its heat
-// meter, the objective line, a bust meter, context prompts, toasts — and
-// the minimap, a 2D canvas that draws the districts tinted by their live
-// heat, the roads, the mission marker, the shops and the police. The
-// title, briefing, pause, game-over and victory screens are DOM too; the
-// main loop wires their buttons through bind().
+// hud.js — everything the player reads: the DOM heads-up display and the
+// minimap. The minimap is the District Heat map as much as a navigation
+// aid: each district's ground flushes red as its heat climbs, police are
+// blue blips, the mission marker is gold, and the player is the white
+// arrow in the middle of their own mess.
 
-import { DISTRICTS, EXTENT, streetCenter, GRID } from "./config.js";
+import { ROAD_LINES, DISTRICTS, districtAt } from './config.js';
 
-const $ = (id) => document.getElementById(id);
+const RADIO = {
+  hills: 'HILLS FM 98.2 — easy listening',
+  oldtown: 'RADIO ANTIGUA — boleros',
+  downtown: 'SOLMAR 101.4 — city pop',
+  industrial: 'FORGE RADIO — metal hour',
+  marina: 'MARINA WAVE — yacht rock',
+  beachfront: 'BRISA BEACH RADIO — surf & soul',
+};
 
-export class Hud {
+const SHOP_MARKS = [
+  ['gunShop', 'G', '#ffd34d'],
+  ['spray', 'S', '#7ad0ff'],
+  ['hospital', '+', '#ff8a7a'],
+  ['diner', 'D', '#ffc98a'],
+  ['bar', 'B', '#8affc1'],
+  ['garage', 'R', '#d9d9d9'],
+];
+
+export class HUD {
   constructor() {
+    const $ = (id) => document.getElementById(id);
     this.el = {
-      hud: $("hud"),
-      health: $("healthfill"),
-      district: $("district-name"),
-      heat: $("heatfill"),
-      stars: $("stars"),
-      cash: $("cash"),
-      clock: $("clock"),
-      objective: $("objective"),
-      objectiveText: $("objective-text"),
-      objectiveDist: $("objective-dist"),
-      speedo: $("speedo"),
-      weapon: $("weapon"),
-      radio: $("radio"),
-      toast: $("toast"),
-      bust: $("bustwrap"),
-      bustFill: $("bustfill"),
-      prompt: $("prompt"),
-      flash: $("flash"),
-      flashText: $("flash-text"),
-      flashSub: $("flash-sub"),
-      minimap: $("minimap"),
+      hud: $('hud'), healthFill: $('health-fill'), healthText: $('health-text'),
+      cash: $('cash'), stars: $('stars'), bustWrap: $('bust-wrap'), bustFill: $('bust-fill'),
+      objective: $('objective'), objectiveDist: $('objective-dist'),
+      clock: $('clock'), district: $('district-name'), heatFill: $('heat-fill'),
+      speed: $('speed'), weapon: $('weapon-name'), ammo: $('ammo'),
+      prompt: $('prompt'), banner: $('banner'), bannerTitle: $('banner-title'),
+      bannerSub: $('banner-sub'), toast: $('toast'), radio: $('radio-label'),
+      minimap: $('minimap'),
     };
-    this.mapCtx = this.el.minimap.getContext("2d");
-    this.toastUntil = 0;
-    this.flashUntil = 0;
-    this.screens = ["title", "how", "pause", "brief", "over", "victory"];
+    this.mm = this.el.minimap.getContext('2d');
+    this.bannerTimer = 0;
+    this.toastTimer = 0;
+    this.cache = {};
   }
 
-  bind(handlers) {
-    const on = (id, fn) => {
-      const el = $(id);
-      if (el) el.addEventListener("click", fn);
-    };
-    on("btn-start", handlers.start);
-    on("btn-continue", handlers.cont);
-    on("btn-how", () => this.showScreen("how"));
-    on("btn-how-back", () => this.showScreen("title"));
-    on("btn-resume", handlers.resume);
-    on("btn-restart", handlers.restart);
-    on("btn-accept", handlers.accept);
-    on("btn-decline", handlers.decline);
-    on("btn-again", handlers.again);
-    on("btn-victory-again", handlers.again);
-  }
-
-  showScreen(name) {
-    for (const s of this.screens) {
-      const el = $(`screen-${s}`);
-      if (el) el.classList.toggle("visible", s === name);
+  setText(key, node, text) {
+    if (this.cache[key] !== text) {
+      this.cache[key] = text;
+      node.textContent = text;
     }
-    this.el.hud.classList.toggle("visible", name === null);
   }
 
-  setContinueVisible(v) {
-    $("btn-continue").style.display = v ? "" : "none";
+  banner(title, sub = '', ms = 3400) {
+    this.el.bannerTitle.textContent = title;
+    this.el.bannerSub.textContent = sub;
+    this.el.banner.classList.add('show');
+    window.clearTimeout(this.bannerTimer);
+    this.bannerTimer = window.setTimeout(() => this.el.banner.classList.remove('show'), ms);
   }
 
-  setBrief(title, text, reward) {
-    $("brief-title").textContent = title;
-    $("brief-text").textContent = text;
-    $("brief-reward").textContent = reward ? `Reward $${reward}` : "";
+  toast(text, ms = 2300) {
+    this.el.toast.textContent = text;
+    this.el.toast.classList.add('show');
+    window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.el.toast.classList.remove('show'), ms);
   }
 
-  setOver(title, sub) {
-    $("over-title").textContent = title;
-    $("over-title").style.color = title === "BUSTED" ? "#7ec3ff" : "#ff5d5d";
-    $("over-sub").textContent = sub;
+  setPrompt(text) {
+    this.setText('prompt', this.el.prompt, text ?? '');
+    this.el.prompt.style.opacity = text ? '1' : '0';
   }
 
-  setVictory(stats, cash) {
-    $("victory-stats").textContent =
-      `Missions ${stats.missionsDone}/8 · Cars stolen ${stats.steals} · ` +
-      `Knockouts ${stats.knockouts} · Highest heat ${stats.topStars} stars · Cash $${cash}`;
+  showScreen(id) {
+    for (const s of ['screen-title', 'screen-pause', 'screen-over', 'screen-victory']) {
+      document.getElementById(s).classList.toggle('show', s === id);
+    }
+    this.el.hud.classList.toggle('show', id === null);
   }
 
-  toast(msg, seconds = 3.2) {
-    this.el.toast.textContent = msg;
-    this.el.toast.classList.add("visible");
-    this.toastUntil = performance.now() + seconds * 1000;
-  }
-
-  flash(text, sub = "") {
-    this.el.flashText.textContent = text;
-    this.el.flashSub.textContent = sub;
-    this.el.flash.classList.add("visible");
-    this.flashUntil = performance.now() + 2600;
-  }
-
-  tick() {
-    const now = performance.now();
-    if (now > this.toastUntil) this.el.toast.classList.remove("visible");
-    if (now > this.flashUntil) this.el.flash.classList.remove("visible");
-  }
-
-  update(s) {
-    this.el.health.style.width = `${Math.max(0, (s.health / s.maxHealth) * 100)}%`;
-    this.el.health.style.background = s.health < 30 ? "#ff5d5d" : "#7dd069";
-    this.el.district.textContent = s.districtName;
-    this.el.heat.style.width = `${s.heatFrac * 100}%`;
-    this.el.stars.textContent = "★".repeat(s.stars) + "☆".repeat(5 - s.stars);
-    this.el.stars.style.opacity = s.stars > 0 ? "1" : "0.25";
-    this.el.cash.textContent = `$${s.cash}`;
-    this.el.clock.textContent = s.clockText;
-    if (s.objective) {
-      this.el.objective.classList.add("visible");
-      this.el.objectiveText.textContent = s.objective.label;
-      this.el.objectiveDist.textContent = s.objective.dist !== null && s.objective.dist !== undefined ? `${Math.round(s.objective.dist)}m` : "";
+  update(G) {
+    const s = G.state;
+    // health + cash
+    this.el.healthFill.style.width = `${Math.max(0, s.health)}%`;
+    this.el.healthFill.style.background = s.health > 35 ? 'linear-gradient(90deg,#59d977,#a8e063)' : 'linear-gradient(90deg,#d93a2b,#e07a3c)';
+    this.setText('health', this.el.healthText, `${Math.ceil(Math.max(0, s.health))}`);
+    this.setText('cash', this.el.cash, `$${s.cash.toLocaleString('en-US')}`);
+    // stars
+    const stars = G.police.stars;
+    this.setText('stars', this.el.stars, '★'.repeat(stars) + '☆'.repeat(5 - stars));
+    this.el.stars.classList.toggle('flash', stars >= 4);
+    this.el.stars.style.opacity = stars > 0 ? '1' : '0.25';
+    // bust meter
+    const bust = G.police.bust;
+    this.el.bustWrap.style.opacity = bust > 0.02 ? '1' : '0';
+    this.el.bustFill.style.width = `${bust * 100}%`;
+    // clock + district + its heat
+    const mins = Math.floor(G.clockMinutes) % (24 * 60);
+    const hh = String(Math.floor(mins / 60)).padStart(2, '0');
+    const mm = String(mins % 60).padStart(2, '0');
+    this.setText('clock', this.el.clock, `${hh}:${mm}`);
+    const d = districtAt(G.playerPos.x, G.playerPos.z);
+    this.setText('district', this.el.district, d.name);
+    this.el.heatFill.style.width = `${G.police.heatOf(d).value}%`;
+    // objective
+    const obj = G.missions.objective(G);
+    this.setText('objective', this.el.objective, obj.text);
+    if (obj.marker) {
+      const dist = Math.hypot(obj.marker.x - G.playerPos.x, obj.marker.z - G.playerPos.z);
+      this.setText('objdist', this.el.objectiveDist, `${Math.round(dist)} m`);
     } else {
-      this.el.objective.classList.remove("visible");
+      this.setText('objdist', this.el.objectiveDist, '');
     }
-    this.el.speedo.textContent = s.speedKmh !== null ? `${Math.round(Math.abs(s.speedKmh))} km/h` : "";
-    if (s.weapon) {
-      this.el.weapon.textContent = `${s.weapon.weapon}  ${s.weapon.mag} / ${s.weapon.reserve}${s.weapon.reloading ? "  (reloading)" : ""}`;
+    // driving + weapons
+    if (G.playerInCar) {
+      this.setText('speed', this.el.speed, `${Math.round(Math.abs(G.playerCar.speed) * 3.6)} km/h`);
+      this.setText('radio', this.el.radio, RADIO[d.id] ?? '');
     } else {
-      this.el.weapon.textContent = "";
+      this.setText('speed', this.el.speed, '');
+      this.setText('radio', this.el.radio, '');
     }
-    this.el.radio.textContent = s.radio || "";
-    this.el.bust.classList.toggle("visible", s.bustFrac > 0.02);
-    this.el.bustFill.style.width = `${s.bustFrac * 100}%`;
-    if (s.prompt) {
-      this.el.prompt.textContent = s.prompt;
-      this.el.prompt.classList.add("visible");
-    } else {
-      this.el.prompt.classList.remove("visible");
-    }
+    this.setText('weapon', this.el.weapon, G.combat.current === 'fists' ? '' : G.combat.current.toUpperCase());
+    this.setText('ammo', this.el.ammo, G.combat.current === 'fists' ? '' : G.combat.ammoLabel());
+    this.drawMinimap(G);
   }
 
-  drawMinimap(v) {
-    const ctx = this.mapCtx;
-    const W = this.el.minimap.width;
-    const world = EXTENT + 140;
-    const k = W / world;
-    const px = (x) => (x + 40) * k;
-    const pz = (z) => (z + 40) * k;
-    ctx.fillStyle = "#274b63";
-    ctx.fillRect(0, 0, W, W);
-    // Districts, tinted by their live heat.
+  drawMinimap(G) {
+    const ctx = this.mm;
+    const S = 220, K = S / 440; // world [-220, 220] on both axes
+    const X = (x) => (x + 220) * K;
+    const Y = (z) => (z + 220) * K;
+    ctx.fillStyle = '#274b3a';
+    ctx.fillRect(0, 0, S, S);
+    // sea and beach to the south
+    ctx.fillStyle = '#2f7d99';
+    ctx.fillRect(0, Y(236), S, S - Y(236));
+    ctx.fillStyle = '#e6cf9e';
+    ctx.fillRect(0, Y(184), S, Y(236) - Y(184));
+    // districts, flushed by their own heat
     for (const d of DISTRICTS) {
-      ctx.fillStyle = d.tint;
-      ctx.fillRect(px(d.x0), pz(d.z0), (d.x1 - d.x0) * k, (d.z1 - d.z0) * k);
-      const heat = v.heats.get(d.id) || 0;
-      if (heat > 1) {
-        ctx.fillStyle = `rgba(230, 40, 30, ${Math.min(0.62, heat / 130)})`;
-        ctx.fillRect(px(d.x0), pz(d.z0), (d.x1 - d.x0) * k, (d.z1 - d.z0) * k);
-      }
+      const [x0, z0, x1, z1] = d.rect;
+      const heat = G.police.heatOf(d).value / 100;
+      ctx.fillStyle = `rgba(214,48,32,${(heat * 0.62).toFixed(3)})`;
+      ctx.fillRect(X(x0), Y(z0), (x1 - x0) * K, (z1 - z0) * K);
     }
-    // Beach and harbor.
-    ctx.fillStyle = "#e8cf9e";
-    ctx.fillRect(px(0), pz(EXTENT), EXTENT * k, 60 * k);
-    ctx.fillStyle = "#8d8578";
-    ctx.fillRect(px(490), pz(642), 120 * k, 96 * k);
-    // Roads.
-    ctx.strokeStyle = "rgba(40,44,48,0.55)";
-    ctx.lineWidth = Math.max(1, 5 * k);
-    for (let i = 0; i <= GRID; i++) {
-      const c = streetCenter(i);
-      ctx.beginPath();
-      ctx.moveTo(px(c), pz(0));
-      ctx.lineTo(px(c), pz(EXTENT));
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(px(0), pz(c));
-      ctx.lineTo(px(EXTENT), pz(c));
-      ctx.stroke();
-    }
-    // Shops and places.
-    ctx.font = `bold ${Math.round(9 * k * 3)}px system-ui`;
-    ctx.textAlign = "center";
-    for (const p of v.places) {
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(px(p.door.x) - 3, pz(p.door.z) - 3, 6, 6);
-      ctx.fillStyle = "#12303f";
-      ctx.fillText(p.letter, px(p.door.x), pz(p.door.z) + 3);
-    }
-    // Police blips.
-    ctx.fillStyle = Math.floor(v.time * 2.4) % 2 ? "#3d7bff" : "#ff4040";
-    for (const c of v.policeCars) {
-      ctx.beginPath();
-      ctx.arc(px(c.pos.x), pz(c.pos.z), 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = "#3d7bff";
-    for (const c of v.cops) {
-      if (c.down) continue;
-      ctx.fillRect(px(c.pos.x) - 2, pz(c.pos.z) - 2, 4, 4);
-    }
-    // The mission marker.
-    if (v.marker) {
-      const pulse = 4 + Math.sin(v.time * 5) * 1.4;
-      ctx.fillStyle = "#ffd21f";
-      ctx.beginPath();
-      ctx.arc(px(v.marker.x), pz(v.marker.z), pulse, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#7a5c00";
-      ctx.stroke();
-    }
-    // Cash drops.
-    ctx.fillStyle = "#59d977";
-    for (const d of v.drops) {
-      ctx.fillRect(px(d.x) - 2, pz(d.z) - 2, 4, 4);
-    }
-    // The player arrow.
-    const x = px(v.player.x);
-    const y = pz(v.player.z);
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(-v.player.angle);
-    ctx.fillStyle = "#ffffff";
+    // roads
+    ctx.strokeStyle = 'rgba(230,230,225,0.5)';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, 6);
-    ctx.lineTo(-4, -5);
-    ctx.lineTo(4, -5);
+    for (const line of ROAD_LINES) {
+      ctx.moveTo(X(line), Y(-184)); ctx.lineTo(X(line), Y(184));
+      ctx.moveTo(X(-184), Y(line)); ctx.lineTo(X(184), Y(line));
+    }
+    ctx.stroke();
+    // shops
+    ctx.font = 'bold 8px sans-serif';
+    ctx.textAlign = 'center';
+    for (const [key, letter, color] of SHOP_MARKS) {
+      const p = G.places[key];
+      if (!p) continue;
+      ctx.fillStyle = color;
+      ctx.fillText(letter, X(p.x), Y(p.z) + 3);
+    }
+    // mission marker: a gold ring that breathes
+    const obj = G.missions.objective(G);
+    if (obj.marker) {
+      const pulse = 4.5 + Math.sin(G.time * 5) * 1.3;
+      ctx.strokeStyle = '#ffd34d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(X(obj.marker.x), Y(obj.marker.z), pulse, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // police blips
+    const blink = Math.floor(G.time * 3) % 2 === 0;
+    for (const car of G.cars) {
+      if (car.role !== 'police' && car.role !== 'blockade') continue;
+      ctx.fillStyle = blink ? '#3d8bff' : '#bfe0ff';
+      ctx.fillRect(X(car.pos.x) - 2, Y(car.pos.z) - 2, 4, 4);
+    }
+    for (const ped of G.peds) {
+      if (ped.role !== 'cop' || ped.dead) continue;
+      ctx.fillStyle = '#3d8bff';
+      ctx.fillRect(X(ped.pos.x) - 1.5, Y(ped.pos.z) - 1.5, 3, 3);
+    }
+    // gang blips while a clear-stage runs
+    for (const ped of G.peds) {
+      if (ped.role !== 'gang' || ped.dead) continue;
+      ctx.fillStyle = '#ff4a3d';
+      ctx.fillRect(X(ped.pos.x) - 1.5, Y(ped.pos.z) - 1.5, 3, 3);
+    }
+    // the player arrow
+    const px = X(G.playerPos.x), py = Y(G.playerPos.z);
+    const facing = G.playerInCar ? G.playerCar.angle : G.player.angle;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(Math.PI - facing);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.lineTo(4, 5);
+    ctx.lineTo(0, 2.6);
+    ctx.lineTo(-4, 5);
     ctx.closePath();
     ctx.fill();
     ctx.restore();

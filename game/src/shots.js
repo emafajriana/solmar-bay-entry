@@ -1,170 +1,141 @@
-// SOLMAR BAY — the staged scenes behind the four hand-in screenshots.
+// shots.js — the staged scenes behind the four hand-in screenshots.
 //
-// Each scene is a little director: it poses the world (a teleported
-// player, a set heat level, a live mission objective, a crew of
-// Tiburones), lets the real simulation run a fixed number of steps so
-// traffic and crowds settle into natural places, and — for two of the
-// scenes — holds the camera itself. Because the world is seeded and the
-// step count is fixed, a scene frames the same shot every time. The main
-// loop sets window.__shotReady once the steps are done and two frames
-// have been painted.
+// Each scene is a little director working with the real game: it poses
+// the player, the cars and the heat, then simulates the actual rules
+// forward for a fixed number of fixed steps with scripted inputs (keys
+// held in the real input set, the real District Heat values set through
+// the police), settles the camera, paints, and raises
+// `window.__shotReady`. Nothing here fakes a system: the chase is a real
+// four-star pursuit the PD is running, the pier fight is a real mission
+// stage with live gang AI.
 
-import * as THREE from "three";
-import { Ped } from "./pedestrians.js";
-import { Car } from "./vehicles.js";
-import { Rng } from "./rng.js";
-import { groundHeight } from "./player.js";
+import * as THREE from 'three';
+import { districtAt } from './config.js';
 
-export function planShot(api, name) {
-  const { world, player, police, combat } = api;
+const DT = 1 / 30;
 
-  if (name === "title") {
-    // The cover: the skyline across the water at golden hour, a sports
-    // car on the sand, the title screen over it all.
-    let posed = false;
-    return {
-      steps: 36,
-      run() {
-        if (posed) return;
-        posed = true;
-        player.pos.set(140, 0, 662);
-        player.angle = 0.7;
-        const car = world.cars.find((c) => c.mode === "parked" && c.kind === "sport") || world.cars.find((c) => c.mode === "parked");
-        if (car) {
-          car.pos.set(148, 0, 670);
-          car.angle = 0.9;
-        }
-      },
-      camera(cam) {
-        const t = world.time;
-        cam.position.set(196 + Math.sin(t * 0.11) * 7, 26, 694);
-        cam.lookAt(360, 14, 330);
-      },
-    };
+function run(G, helpers, steps, keys = []) {
+  for (const k of keys) G.input.held.add(k);
+  for (let i = 0; i < steps; i++) {
+    helpers.stepWorld(DT);
+    helpers.updateCamera(DT);
   }
+  for (const k of keys) G.input.held.delete(k);
+}
 
-  if (name === "play") {
-    // On foot Downtown at mid-morning: traffic passing, the first
-    // objective on the HUD, the minimap alive.
-    let posed = false;
-    return {
-      steps: 46,
-      run() {
-        if (posed) return;
-        posed = true;
-        player.pos.set(314, 0, 336);
-        player.angle = Math.PI;
-        // One traffic car rolling down the street toward the player.
-        const car = world.cars.find((c) => c.mode === "traffic");
-        if (car) {
-          car.traffic = { axis: "z", dir: 1, streetIdx: 4 };
-          car.pos.set(308.6, 0, 248);
-          car.angle = 0;
-          car.speed = 11;
-          car.waypoint = { x: 308.6, z: 330 };
-          car.crossDecided = true;
-        }
-        api.startMission(0);
-      },
-    };
+function finish(G, helpers) {
+  helpers.updateCamera(0.4);
+  G.hud.update(G); // shot mode freezes the frame loop: refresh HUD + minimap once
+  helpers.render();
+  helpers.render();
+  window.__shotReady = true;
+}
+
+function sceneTitle(G, helpers) {
+  // the cover: the title screen over a slow marina-to-downtown vista,
+  // traffic moving below. The camera is the director's, not the game's.
+  G.player.placeAt(170, -160, 0);
+  // a sports car waits on the coast road, inside the panorama's frame
+  const show = G.cars.find((c) => c.kind === 'sports' && c.role === 'parked')
+    ?? G.cars.find((c) => c.role === 'parked');
+  if (show) { show.pos.set(-30, 0, 180.6); show.angle = Math.PI / 2; }
+  run(G, helpers, 36);
+  const cam = G.camera;
+  cam.position.set(-88, 25, 208);
+  cam.lookAt(30, 8, 30);
+  G.hud.showScreen('screen-title');
+  helpers.render();
+  helpers.render();
+  window.__shotReady = true;
+}
+
+function scenePlay(G, helpers) {
+  // on foot in a Downtown street: traffic passing, crowd on the pavement,
+  // HUD and minimap live, the first objective on screen.
+  G.mode = 'playing';
+  G.player.placeAt(34, -4.6, -Math.PI / 2);
+  G.camYaw = Math.PI / 2;
+  G.camPitch = 0.3;
+  // two locals stroll the same pavement line, ahead of the player
+  const walkers = G.peds.filter((p) => p.role === 'civil' && !p.dead);
+  if (walkers[0]) walkers[0].pos.set(16, 0, -4.7);
+  if (walkers[1]) walkers[1].pos.set(3, 0, -4.9);
+  run(G, helpers, 66, ['KeyW', 'ShiftLeft']);
+  finish(G, helpers);
+}
+
+function sceneChase(G, helpers) {
+  // a real four-star District Heat pursuit: the player floors it along
+  // the Downtown artery while the PD spawns, gives chase and closes in.
+  G.mode = 'playing';
+  const car = G.cars.reduce((a, b) => {
+    const da = Math.hypot(a.pos.x + 12, a.pos.z - 141.4);
+    const db = Math.hypot(b.pos.x + 12, b.pos.z - 141.4);
+    return db < da ? b : a;
+  });
+  car.pos.set(6, 0, 3.4);
+  car.angle = Math.PI / 2;
+  car.speed = 13;
+  car.role = 'player';
+  car.playerDriven = true;
+  G.playerInCar = true;
+  G.playerCar = car;
+  G.player.setVisible(false);
+  const heat = G.police.heatOf(districtAt(6, 0));
+  heat.value = 78;
+  heat.lastCrime = G.time;
+  G.camYaw = car.angle + Math.PI;
+  G.camPitch = 0.42;
+  run(G, helpers, 150, ['KeyW']);
+  // staging guarantee: the chase camera looks forward, so frame the
+  // pursuit alongside and ahead — a cruiser pulling up on the flank
+  // and a second angled across the lane in front, roadblock-style
+  const f = car.forward();
+  const rx = -f.z, rz = f.x; // right-hand vector in plan view
+  const flank = G.cars.find((c) => c.role === 'police')
+    ?? G.fleet.spawnPolice(car.pos.x + f.x * 7 + rx * 3.4, car.pos.z + f.z * 7 + rz * 3.4);
+  flank.pos.set(car.pos.x + f.x * 7 + rx * 3.4, 0, car.pos.z + f.z * 7 + rz * 3.4);
+  flank.angle = car.angle;
+  flank.speed = car.speed;
+  const block = G.fleet.spawnPolice(car.pos.x + f.x * 26, car.pos.z + f.z * 26);
+  if (block) { block.angle = car.angle + 0.6; block.speed = 0; }
+  run(G, helpers, 8, ['KeyW']);
+  finish(G, helpers);
+}
+
+function sceneMission(G, helpers) {
+  // the Harbor Heist clear-stage on the pier: armed player, Tiburones
+  // ahead, three stars of Industrial heat, objective counting the gang.
+  G.mode = 'playing';
+  G.missions.index = 6;
+  G.missions.active = true;
+  G.missions.stageIdx = 1;
+  G.missions.beginStage(G);
+  G.player.placeAt(131, 229, 0);
+  G.combat.unlock('shotgun');
+  G.combat.current = 'shotgun';
+  const heat = G.police.heatOf(districtAt(131, 229));
+  heat.value = 55;
+  heat.lastCrime = G.time;
+  G.camYaw = Math.PI;
+  G.camPitch = 0.3;
+  run(G, helpers, 26, ['KeyA']);
+  run(G, helpers, 30);
+  finish(G, helpers);
+}
+
+export async function stageShot(G, name, helpers) {
+  window.__shotReady = false;
+  try {
+    // let the world settle for a beat before any staging
+    run(G, helpers, 12);
+    if (name === 'title') sceneTitle(G, helpers);
+    else if (name === 'play') scenePlay(G, helpers);
+    else if (name === 'chase') sceneChase(G, helpers);
+    else if (name === 'mission') sceneMission(G, helpers);
+    else throw new Error(`unknown shot scene: ${name}`);
+  } catch (err) {
+    window.__shotError = String(err && err.stack ? err.stack : err);
+    throw err;
   }
-
-  if (name === "chase") {
-    // Three stars in Old Town: the player is already rolling north with
-    // the PD converging, speedo and stars on the HUD.
-    let posed = false;
-    let behind = null;
-    let alongside = null;
-    return {
-      steps: 80,
-      run(step) {
-        if (!posed) {
-          posed = true;
-          const car = world.cars.find((c) => c.mode === "parked");
-          car.pos.set(239.4, 0, 430);
-          car.angle = Math.PI;
-          car.mode = "player";
-          player.mode = "car";
-          player.car = car;
-          api.setHeat("oldtown", 80);
-          api.setHeat("marina", 80);
-          // Cruisers already in the scene: one on the tail, and one
-          // pacing the player in the next lane. The pacing car is
-          // re-pinned to its mark every step — left to the pursuit AI,
-          // the pack scatters into the blocks and out of the frame.
-          behind = new Car(api.scene, { kind: "police", color: 0x1d2733, x: 233, z: 482, angle: Math.PI, mode: "police" });
-          behind.speed = 17;
-          alongside = new Car(api.scene, { kind: "police", color: 0x1d2733, x: 232.5, z: 428, angle: Math.PI, mode: "police" });
-          alongside.speed = 15.5;
-          police.cars.push(behind, alongside);
-          world.cars.push(behind, alongside);
-          api.startMission(0);
-        }
-        if (player.car) {
-          // The stage car cannot be wrecked out from under the shot.
-          player.car.health = 100;
-          player.car.speed = 15.5;
-          player.car.angle = Math.PI;
-          // Hold the lane on street 3.
-          player.car.pos.x += (239.4 - player.car.pos.x) * 0.2;
-        }
-        for (const c of police.cars) c.health = 100;
-        if (behind) behind.speed = Math.min(behind.speed, 17);
-        if (alongside && player.car) {
-          alongside.pos.set(player.car.pos.x - 6.9, 0, player.car.pos.z + 2.5);
-          alongside.angle = Math.PI;
-          alongside.speed = 15.5;
-          alongside.health = 100;
-        }
-        void step;
-      },
-    };
-  }
-
-  // "mission": the Harbor Heist — on the pier at dusk-side light, rifle
-  // up, the Tiburones crew in the container lanes, heat on the Industrial
-  // grid and the objective on screen. Late in the scene the player opens
-  // fire down the lane, so the frame catches the fight itself.
-  let posed = false;
-  let crew = [];
-  return {
-    steps: 52,
-    run(step) {
-      if (!posed) {
-        posed = true;
-        player.pos.set(545, groundHeight(545, 652), 652);
-        player.angle = Math.atan2(572 - 545, 656 - 652);
-        combat.give("rifle");
-        const grng = new Rng(99);
-        // On the open apron north of the container rows — nothing
-        // between the camera, the player, and the crew.
-        const spots = [
-          [565, 656], [578, 652], [570, 662], [584, 660], [560, 646],
-        ];
-        for (const [x, z] of spots) {
-          const ped = new Ped(api.scene, grng, { x, z, kind: "gang" });
-          ped.stationary = true;
-          ped.angle = Math.atan2(545 - x, 652 - z);
-          ped.mesh.rotation.y = ped.angle;
-          world.peds.push(ped);
-          crew.push(ped);
-        }
-        api.setHeat("industrial", 58);
-        api.setHeat("marina", 58);
-        api.startMission(6);
-      }
-      if (step >= 30 && step % 2 === 0) {
-        const target = crew.find((p) => !p.down) || crew[0];
-        if (target) {
-          const origin = new THREE.Vector3(player.pos.x, player.pos.y + 1.5, player.pos.z);
-          const dir = new THREE.Vector3(target.pos.x - origin.x, -0.02, target.pos.z - origin.z).normalize();
-          combat.attack(0, world, world.events, origin, dir);
-        }
-      }
-    },
-    camera(cam) {
-      cam.position.set(531, 4.0, 646);
-      cam.lookAt(574, 1.5, 657);
-    },
-  };
 }

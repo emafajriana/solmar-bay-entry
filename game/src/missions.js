@@ -1,237 +1,269 @@
-// SOLMAR BAY — the story: eight missions for fixer Carmen "La Jefa"
-// Duarte, against the Los Tiburones gang and the heat of the Solmar PD.
+// missions.js — the story: eight jobs for fixer Carmen "La Jefa" Duarte
+// of La Perla bar, against the Los Tiburones and the Solmar PD.
 //
-// A mission is a list of stages. The runner walks the stages, keeps the
-// HUD objective and the world marker honest, spawns what a stage needs
-// (gang crews, the repo target car), and calls back into the game to pay
-// out, fail, or finish. Fail states are real: timers run out, the repo
-// car can be destroyed, and getting wasted or busted mid-mission ends it
-// — Carmen will offer the same job again at the bar.
+// A mission is a list of stages, and a stage is one verb: go somewhere,
+// deliver against a clock, clear a gang off a patch of ground, steal one
+// specific car, or run. The system below walks the stages, keeps the
+// objective text and the gold marker fed to the HUD, pays out, and fails
+// the mission (back to the offer marker) when a timer dies or the player
+// goes down. Between missions the offer marker waits at La Perla — the
+// first one waits at the motel where the player wakes up.
 
-import { HARBOR } from "./config.js";
+import { Ped } from './pedestrians.js';
+import { districtAt } from './config.js';
 
-const BAR = { x: 88.5, z: 502 };
-const DINER = { x: 316.5, z: 502 };
-const GARAGE = { x: 544.5, z: 426 };
-const HQ = { x: 88.5, z: 198 };
+const GANG_OUTFIT = { shirt: 0xa3271e, pants: 0x22242a, hat: 0x7d1d14 };
 
-export const MISSIONS = [
+const MISSIONS = [
   {
-    title: "Welcome to Solmar",
-    reward: 200,
-    brief: "Carmen: \"You made it to the bay, primo. I'm Carmen — I run La Perla, and half the favours in this town run through me. Get yourself across the Marina and come say hello properly.\"",
-    stages: [{ type: "goto", x: BAR.x, z: BAR.z, r: 6, label: "Meet Carmen at La Perla" }],
-  },
-  {
-    title: "Pizza Run",
-    reward: 350,
-    brief: "Carmen: \"Café Brisa owes me a favour and I owe a judge a pizza — still hot, that's the whole deal. Pick it up at the diner, drop it at the courthouse flats Downtown. Don't let it get cold.\"",
+    name: 'Welcome to Solmar', reward: 200, offer: 'motel',
+    intro: 'Carmen: "You made it to the bay. Come see me at La Perla — and try not to scratch the paint."',
     stages: [
-      { type: "goto", x: DINER.x, z: DINER.z, r: 6, label: "Pick up the delivery at Café Brisa" },
-      { type: "timed", x: 468.5, z: 198, r: 7, seconds: 80, label: "Deliver it Downtown while it's hot" },
+      { type: 'goto', text: 'Drive to La Perla bar in the Marina', place: 'bar', r: 8 },
     ],
   },
   {
-    title: "Getaway Driver",
-    reward: 600,
-    brief: "Carmen: \"Some friends of mine are making a withdrawal they didn't exactly schedule. Be outside the Gun Runner block when they come out, and when the heat comes — and it will — lose it, then bring them to the Bay Garage.\"",
+    name: 'Pizza Run', reward: 350, offer: 'bar',
+    intro: 'Carmen: "A judge downtown owes me. His pizza leaves Café Brisa hot — keep it that way."',
     stages: [
-      { type: "goto", x: 380, z: 306, r: 8, label: "Wait for the crew by the Gun Runner block" },
-      { type: "escape", x: GARAGE.x, z: GARAGE.z, r: 8, label: "Get the crew to the Bay Garage, then shake the heat" },
+      { type: 'goto', text: 'Pick up the pizza at Café Brisa', place: 'diner', r: 7 },
+      { type: 'deliver', text: 'Deliver the pizza Downtown, while it is hot', x: 44, z: -52, r: 8, time: 150 },
     ],
   },
   {
-    title: "Turf War",
-    reward: 900,
-    brief: "Carmen: \"Los Tiburones think Beachfront is theirs now. Five of them, hanging around the palms like they own the sunset. Go explain the property market to them.\"",
-    stages: [{ type: "clear", x: 430, z: 512, r: 30, count: 5, label: "Clear Los Tiburones out of Beachfront" }],
-  },
-  {
-    title: "The Drop",
-    reward: 1200,
-    brief: "Carmen: \"A package is waiting by the Marina warehouses. It goes to the harbor, fast and quiet, and nobody opens it. The Tiburones would love to know what's inside — don't give them the chance.\"",
+    name: 'Getaway Driver', reward: 600, offer: 'bar',
+    intro: 'Carmen: "My crew just lifted a payroll in Industrial. They need a wheel. Be that wheel."',
     stages: [
-      { type: "goto", x: 205, z: 436, r: 7, label: "Pick up the package at the Marina warehouses" },
-      { type: "timed", x: HARBOR.x, z: 660, r: 12, seconds: 130, label: "Deliver it to the harbor pier" },
+      { type: 'goto', text: 'Pick up the crew in Industrial', x: 152, z: -44, r: 8 },
+      { type: 'escape', text: 'Lose the heat and reach Bay Garage', place: 'garage', r: 9, heat: 46 },
     ],
   },
   {
-    title: "Repo Job",
-    reward: 1800,
-    brief: "Carmen: \"A man in the Hills borrowed money against a very pretty sports car and then forgot both. The car sits up there shining. Take it — carefully, it's the collateral — and park it at the Bay Garage.\"",
+    name: 'Turf War', reward: 900, offer: 'bar',
+    intro: 'Carmen: "Tiburones are selling on my beach. Five of them. Evict them."',
     stages: [
-      { type: "steal", x: 505, z: 46, label: "Steal the marked sports car in the Hills" },
-      { type: "goto", x: GARAGE.x, z: GARAGE.z, r: 8, label: "Deliver it to the Bay Garage, in one piece", needsTargetCar: true },
+      { type: 'goto', text: 'Head to the Beachfront turf', x: 24, z: 66, r: 12 },
+      { type: 'clear', text: 'Clear the Tiburones off the block', gx: 24, gz: 66, n: 5 },
     ],
   },
   {
-    title: "Harbor Heist",
-    reward: 3000,
-    brief: "Carmen: \"Tonight we take the Tiburones' whole shipment at the harbor. Their boys will be guarding the containers. Clear the pier, and when the PD comes down on the Industrial grid, get out.\"",
+    name: 'The Drop', reward: 1200, offer: 'bar',
+    intro: 'Carmen: "A package waits in Old Town. The pier needs it. Fast, quiet, no sirens in the story."',
     stages: [
-      { type: "goto", x: HARBOR.x, z: 664, r: 14, label: "Reach the harbor pier" },
-      { type: "clear", x: HARBOR.x, z: 690, r: 46, count: 6, label: "Clear the Tiburones off the pier" },
-      { type: "escape", x: GARAGE.x, z: GARAGE.z, r: 8, label: "Escape to the Bay Garage and shake the heat" },
+      { type: 'goto', text: 'Collect the package in Old Town', x: -152, z: 2, r: 8 },
+      { type: 'deliver', text: 'Take the package to the end of the pier', place: 'pier', r: 9, time: 190 },
     ],
   },
   {
-    title: "King of the Bay",
-    reward: 5000,
-    brief: "Carmen: \"One job left, and it's the big one. Club Tiburón, in Old Town — their home, their whole crew. Walk in there and end this. Then come back to La Perla and we'll drink to a quieter bay.\"",
+    name: 'Repo Job', reward: 1800, offer: 'bar',
+    intro: 'Carmen: "A gold sports car in the Hills belongs to a man who stopped paying. Bring it home intact."',
     stages: [
-      { type: "clear", x: HQ.x + 24, z: HQ.z, r: 34, count: 8, label: "Assault Club Tiburón and clear the crew" },
-      { type: "goto", x: BAR.x, z: BAR.z, r: 7, label: "Return to La Perla" },
+      { type: 'steal', text: 'Steal the gold sports car in the Hills', x: -58, z: -141, angle: Math.PI / 2 },
+      { type: 'deliver', text: 'Deliver the car to Bay Garage — intact', place: 'garage', r: 9, needsCar: true },
+    ],
+  },
+  {
+    name: 'Harbor Heist', reward: 3000, offer: 'bar',
+    intro: 'Carmen: "Tonight we take the pier back. Clear it, then run like the bay is watching."',
+    stages: [
+      { type: 'goto', text: 'Go to the harbour pier', place: 'pier', r: 12 },
+      { type: 'clear', text: 'Clear the Tiburones from the pier', gx: 131, gz: 246, n: 6 },
+      { type: 'escape', text: 'Escape to La Perla', place: 'bar', r: 9, heat: 62 },
+    ],
+  },
+  {
+    name: 'King of the Bay', reward: 5000, offer: 'bar',
+    intro: 'Carmen: "Club Tiburón. End of the war, one way or the other. Come back king."',
+    stages: [
+      { type: 'goto', text: 'Storm Club Tiburón', place: 'hq', r: 13 },
+      { type: 'clear', text: 'Take the club — wave one', gx: 69, gz: 168, n: 4 },
+      { type: 'clear', text: 'Take the club — the last of them', gx: 69, gz: 152, n: 4 },
+      { type: 'goto', text: 'Return to La Perla', place: 'bar', r: 9 },
     ],
   },
 ];
 
-export class MissionRunner {
-  constructor(hooks) {
-    this.hooks = hooks; // { spawnGang, spawnTargetCar, toast, pay, crimeAt, setBanner }
-    this.active = null; // { def, stageIdx, timer, enemies, targetCar, stage }
-    this.offerIndex = 0;
+export class MissionSystem {
+  constructor() {
+    this.index = 0;          // next mission to offer
+    this.active = false;
+    this.stageIdx = 0;
+    this.stage = null;       // runtime state for the current stage
+    this.done = false;       // whole story finished
+    this.offerPlace = 'motel';
   }
 
-  get busy() {
-    return this.active !== null;
+  def() { return MISSIONS[this.index] ?? null; }
+
+  targetOf(stageDef, G) {
+    if (stageDef.place) {
+      const p = G.places[stageDef.place];
+      return { x: p.x, z: p.z };
+    }
+    return { x: stageDef.x, z: stageDef.z };
   }
 
-  currentDef(index) {
-    return MISSIONS[index] || null;
+  // What the HUD shows: objective line + gold marker position (or null).
+  objective(G) {
+    if (this.done) return { text: 'The bay is yours. Free roam — the city keeps its heat.', marker: null };
+    if (!this.active) {
+      const place = G.places[this.def().offer];
+      return { text: `Meet the fixer — new work: "${this.def().name}"`, marker: { x: place.x, z: place.z } };
+    }
+    const sd = this.def().stages[this.stageIdx];
+    let text = sd.text;
+    if (sd.type === 'clear' && this.stage) {
+      const left = this.stage.gang.filter((p) => !p.dead).length;
+      text += ` (${left} left)`;
+    }
+    if (this.stage?.tLeft !== undefined && this.stage.tLeft !== null) {
+      text += ` — ${Math.max(0, Math.ceil(this.stage.tLeft))}s`;
+    }
+    const marker = sd.type === 'clear' && this.stage
+      ? { x: this.stage.gx, z: this.stage.gz }
+      : this.targetOf(sd, G);
+    return { text, marker };
   }
 
-  start(index) {
-    const def = MISSIONS[index];
-    if (!def) return;
-    this.active = { def, index, stageIdx: -1, timer: 0, enemies: [], targetCar: null };
-    this.nextStage();
+  startMission(G) {
+    this.active = true;
+    this.stageIdx = 0;
+    G.hud.banner(this.def().name, this.def().intro, 5200);
+    G.audio.blip();
+    this.beginStage(G);
   }
 
-  nextStage() {
-    const a = this.active;
-    a.stageIdx++;
-    // Retire the previous stage's survivors.
-    for (const e of a.enemies) if (!e.down) this.hooks.retirePed(e);
-    a.enemies = [];
-    const stage = a.def.stages[a.stageIdx];
-    if (!stage) {
-      this.complete();
+  beginStage(G) {
+    const sd = this.def().stages[this.stageIdx];
+    this.stage = { tLeft: sd.time ?? null, gang: [], gx: sd.gx, gz: sd.gz, car: null };
+    if (sd.type === 'clear') {
+      for (let i = 0; i < sd.n; i++) {
+        const ped = new Ped(G.scene, G.rng, {
+          role: 'gang',
+          x: sd.gx + G.rng.range(-9, 9),
+          z: sd.gz + G.rng.range(-9, 9),
+          outfit: { ...GANG_OUTFIT, skin: undefined },
+        });
+        ped.state = 'stand';
+        this.stage.gang.push(ped);
+        G.peds.push(ped);
+      }
+    }
+    if (sd.type === 'steal') {
+      this.stage.car = G.fleet.spawnSports(sd.x, sd.z, sd.angle ?? 0);
+    }
+    if (sd.type === 'escape' && sd.heat) {
+      const d = districtAt(G.playerPos.x, G.playerPos.z);
+      const h = G.police.heatOf(d);
+      h.value = Math.max(h.value, sd.heat);
+      h.lastCrime = G.time;
+    }
+  }
+
+  fail(G, why) {
+    if (!this.active) return;
+    this.cleanupStage(G);
+    this.active = false;
+    this.stage = null;
+    G.hud.banner('MISSION FAILED', why, 3600);
+    G.audio.jingle(false);
+  }
+
+  cleanupStage(G) {
+    if (!this.stage) return;
+    for (const ped of this.stage.gang) {
+      const i = G.peds.indexOf(ped);
+      if (i !== -1) G.peds.splice(i, 1);
+      ped.dispose(G.scene);
+    }
+    if (this.stage.car && this.stage.car.role === 'parked') {
+      // an un-stolen repo car goes back to being scenery
+      this.stage.car = null;
+    }
+  }
+
+  complete(G) {
+    const reward = this.def().reward;
+    G.state.cash += reward;
+    G.state.stats.earned += reward;
+    G.state.stats.missionsDone++;
+    G.hud.banner('MISSION COMPLETE', `${this.def().name} — +$${reward.toLocaleString('en-US')}`, 4200);
+    G.audio.jingle(true);
+    G.audio.cash();
+    if (this.index === 3) { G.unlockWeapon('shotgun'); G.hud.toast('Shotgun unlocked at the Gun Runner'); }
+    if (this.index === 6) { G.unlockWeapon('rifle'); G.hud.toast('Rifle unlocked at the Gun Runner'); }
+    this.cleanupStage(G);
+    this.active = false;
+    this.stage = null;
+    this.index++;
+    if (this.index >= MISSIONS.length) {
+      this.done = true;
+      G.onStoryComplete();
+    }
+    G.saveGame();
+  }
+
+  onPlayerDown(G) {
+    if (this.active) this.fail(G, 'You went down. The job is off — come back to the marker.');
+  }
+
+  update(dt, G) {
+    if (this.done) return;
+    const def = this.def();
+    if (!def) { this.done = true; return; }
+
+    if (!this.active) {
+      const place = G.places[def.offer];
+      const d = Math.hypot(G.playerPos.x - place.x, G.playerPos.z - place.z);
+      if (d < 6.5 && !G.playerInCar) this.startMission(G);
       return;
     }
-    a.stage = stage;
-    a.timer = stage.type === "timed" ? stage.seconds : 0;
-    if (stage.type === "clear") {
-      a.enemies = this.hooks.spawnGang(stage.x, stage.z, stage.count);
-      this.hooks.toast(`${stage.count} Tiburones in the zone`);
-    }
-    if (stage.type === "steal") {
-      a.targetCar = this.hooks.spawnTargetCar(stage.x, stage.z);
-      this.hooks.toast("The marked car is on the minimap");
-    }
-    if (a.def.title === "Getaway Driver" && a.stageIdx === 1) {
-      this.hooks.crimeAt("killPed", 380, 306); // the crew's exit draws the PD
-      this.hooks.toast("The crew is in! Drive!");
-    }
-    if (a.def.title === "Harbor Heist" && a.stageIdx === 2) {
-      this.hooks.crimeAt("killCop", HARBOR.x, 690);
-      this.hooks.toast("The pier is ours — now run!");
-    }
-  }
 
-  complete() {
-    const a = this.active;
-    this.active = null;
-    this.hooks.pay(a.def.reward, a.index);
-  }
+    const sd = def.stages[this.stageIdx];
+    const st = this.stage;
 
-  fail(reason) {
-    if (!this.active) return;
-    const a = this.active;
-    this.active = null;
-    for (const e of a.enemies) if (!e.down) this.hooks.retirePed(e);
-    if (a.targetCar) this.hooks.retireCar(a.targetCar);
-    this.hooks.failed(a.def.title, reason);
-  }
-
-  // HUD facts for the current stage.
-  objective() {
-    if (!this.active) return null;
-    const s = this.active.stage;
-    let label = s.label;
-    if (s.type === "clear") {
-      const left = this.active.enemies.filter((e) => !e.down).length;
-      label = `${s.label} (${left} left)`;
+    if (st.tLeft !== null && st.tLeft !== undefined) {
+      st.tLeft -= dt;
+      if (st.tLeft <= 0) { this.fail(G, 'Out of time.'); return; }
     }
-    if (s.type === "timed") label = `${s.label} — ${Math.max(0, Math.ceil(this.active.timer))}s`;
-    if (s.type === "escape" && this.active.atDrop) label = "Lose the heat — break line of sight and let the district cool";
-    return { label, x: s.x, z: s.z };
-  }
 
-  update(dt, game) {
-    const a = this.active;
-    if (!a) return;
-    const s = a.stage;
-    const p = game.playerPos();
-
-    // Enemy crews fight back while their stage is live.
-    if (a.enemies.length > 0) {
-      for (const e of a.enemies) {
-        if (e.down) continue;
-        const d = Math.hypot(e.pos.x - p.x, e.pos.z - p.z);
-        e.angle = Math.atan2(p.x - e.pos.x, p.z - e.pos.z);
-        e.mesh.rotation.y = e.angle;
-        if (d > 20) {
-          e.pos.x += Math.sin(e.angle) * 3.4 * dt;
-          e.pos.z += Math.cos(e.angle) * 3.4 * dt;
-        } else if (d < 7) {
-          e.pos.x -= Math.sin(e.angle) * 2 * dt;
-          e.pos.z -= Math.cos(e.angle) * 2 * dt;
-        }
-        if (d < 36 && !game.noEnemyFire) {
-          game.combat.enemyShoot(e, { x: p.x, z: p.z }, game.world, game.events, game.time);
-        }
+    let stageDone = false;
+    if (sd.type === 'deliver' && sd.needsCar && this.missionCar && this.missionCar.health <= 0) {
+      this.fail(G, 'The car is wrecked. Carmen wanted it intact.');
+      return;
+    }
+    if (sd.type === 'goto' || sd.type === 'deliver' || sd.type === 'escape') {
+      const t = this.targetOf(sd, G);
+      const d = Math.hypot(G.playerPos.x - t.x, G.playerPos.z - t.z);
+      if (sd.type === 'deliver' && sd.needsCar) {
+        stageDone = d < sd.r && G.playerCar === this.missionCar;
+      } else {
+        stageDone = d < sd.r;
+      }
+    } else if (sd.type === 'clear') {
+      let anyAlive = false;
+      for (const ped of st.gang) {
+        if (ped.dead) continue;
+        anyAlive = true;
+        const d = Math.hypot(ped.pos.x - G.playerPos.x, ped.pos.z - G.playerPos.z);
+        ped.state = d < 38 ? 'fight' : 'stand';
+      }
+      stageDone = !anyAlive;
+    } else if (sd.type === 'steal') {
+      if (st.car.health <= 0) { this.fail(G, 'The car is wrecked. Carmen wanted it intact.'); return; }
+      if (G.playerCar === st.car) {
+        this.missionCar = st.car;
+        stageDone = true;
       }
     }
 
-    switch (s.type) {
-      case "goto": {
-        if (s.needsTargetCar && a.targetCar && a.targetCar.health <= 0) {
-          this.fail("The collateral burned. Carmen is not pleased.");
-          return;
-        }
-        const inCar = s.needsTargetCar ? game.player.car === a.targetCar : true;
-        if (Math.hypot(p.x - s.x, p.z - s.z) < s.r && inCar) this.nextStage();
-        break;
-      }
-      case "timed": {
-        a.timer -= dt;
-        if (a.timer <= 0) {
-          this.fail("Out of time.");
-          return;
-        }
-        if (Math.hypot(p.x - s.x, p.z - s.z) < s.r) this.nextStage();
-        break;
-      }
-      case "clear": {
-        if (a.enemies.every((e) => e.down)) this.nextStage();
-        break;
-      }
-      case "steal": {
-        if (game.player.car && game.player.car === a.targetCar) {
-          this.hooks.toast("That's the car — get it to the garage");
-          this.nextStage();
-        } else if (a.targetCar && a.targetCar.health <= 0) {
-          this.fail("The car was destroyed before you could take it.");
-        }
-        break;
-      }
-      case "escape": {
-        const atDrop = Math.hypot(p.x - s.x, p.z - s.z) < s.r + 6;
-        a.atDrop = atDrop;
-        // Parked up at the drop, out of sight: the district cools fast.
-        if (atDrop && game.police.seenAgo > 2) this.hooks.coolDistrict(p.x, p.z, 3.4 * dt);
-        if (atDrop && game.police.stars === 0) this.nextStage();
-        break;
+    if (stageDone) {
+      this.stageIdx++;
+      if (this.stageIdx >= def.stages.length) this.complete(G);
+      else {
+        G.hud.toast('Objective updated');
+        G.audio.blip();
+        this.beginStage(G);
       }
     }
   }
