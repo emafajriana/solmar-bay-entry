@@ -1,198 +1,348 @@
-// Missions + story: 8 jobs for Carmen "La Jefa" Duarte against the
-// Los Tiburones gang and Solmar PD. Each mission has a target beacon,
-// a HUD objective, a timer where the brief says so, and a cash reward.
-// Completing mission 8 ends the game in victory.
+// missions.js — Carmen Duarte's eight jobs: the story of SOLMAR BAY.
+// A small step framework runs them: each mission is a list of steps with
+// an objective line, a world marker, and a check that reports done/fail.
+// Jobs are offered at the Marina Motel (the first) and at Carmen's Bar
+// (the rest). Failing a job — timer out, death, the repo car destroyed —
+// sends the player back to the offer point to take it again.
 
-import { LANDMARKS, MISSION_REWARDS } from './config.js';
-import { addWanted } from './police.js';
-import { spawnEnemy } from './combat.js';
+import { PLACES } from './config.js';
 
-export const MISSIONS = [
-  {
-    id: 1, title: 'Welcome to Solmar',
-    brief: "Carmen Duarte runs this bay. Drive to her bar, La Marea, and introduce yourself. Grab any car — the keys are in it.",
-    target: LANDMARKS.bar, type: 'drive', reward: MISSION_REWARDS[0],
-  },
-  {
-    id: 2, title: 'Pizza Run',
-    brief: 'Pizza Solmar needs a delivery across town in 90 seconds. On foot or by car — just get there hot.',
-    target: LANDMARKS.pizza, type: 'timed', timeLimit: 90, reward: MISSION_REWARDS[1],
-  },
-  {
-    id: 3, title: 'Getaway Driver',
-    brief: "Pick up Carmen's crew at the back alley, then lose the 2-star heat and bring them to the garage. The cops will come.",
-    target: LANDMARKS.crew, type: 'pickup', thenTarget: LANDMARKS.garage, reward: MISSION_REWARDS[2],
-  },
-  {
-    id: 4, title: 'Turf War',
-    brief: 'Los Tiburones took a block in Beachfront. Clear all 5 gangsters off it. Your shotgun is unlocked — press 2.',
-    target: LANDMARKS.turf, type: 'combat', enemies: 5, reward: MISSION_REWARDS[3],
-  },
-  {
-    id: 5, title: 'The Drop',
-    brief: 'A package for the pier gate, 100 seconds, and the cops are watching. Avoid the heat — do not get caught.',
-    target: LANDMARKS.drop, type: 'timed', timeLimit: 100, reward: MISSION_REWARDS[4],
-  },
-  {
-    id: 6, title: 'Repo Job',
-    brief: 'A Sunset GT is parked by the garage — it belongs to a Tiburones lieutenant. Steal it and deliver it to the garage.',
-    target: LANDMARKS.garage, type: 'steal', reward: MISSION_REWARDS[5],
-  },
-  {
-    id: 7, title: 'Harbor Heist',
-    brief: 'Hit the harbor stash: take out 6 Tiburones, grab the cash, then escape the 3-star heat to the bar.',
-    target: LANDMARKS.harbor, type: 'combat', enemies: 6, thenTarget: LANDMARKS.bar, reward: MISSION_REWARDS[6],
-  },
-  {
-    id: 8, title: 'King of the Bay',
-    brief: 'Finale: storm the Tiburones HQ, survive all 8 gangsters, then drive to La Marea. Solmar is yours.',
-    target: LANDMARKS.hq, type: 'combat', enemies: 8, thenTarget: LANDMARKS.bar, reward: MISSION_REWARDS[7],
-  },
-];
+export function createMissions(G) {
+  const goto = (place, radius, text) => {
+    const t = place.door ?? place;
+    return {
+      text,
+      marker: { x: t.x, z: t.z },
+      radius,
+      check() {
+        const f = G.playerFocus();
+        return Math.hypot(f.x - t.x, f.z - t.z) < radius ? 'done' : null;
+      },
+    };
+  };
+  const killStep = (tag, place, text) => ({
+    text,
+    marker: { x: place.x, z: place.z },
+    radius: 30,
+    check() {
+      return G.combat.countAlive(tag) === 0 ? 'done' : null;
+    },
+  });
 
-export function missionObjective(state) {
-  const m = MISSIONS[state.missionIndex];
-  if (!m) return 'Solmar is yours. Free roam — enjoy the bay.';
-  const stage = state.missionStage || 0;
-  const target = stage === 1 && m.thenTarget ? m.thenTarget : m.target;
-  const dist = Math.round(distanceTo(state, target));
-  return `${m.id}. ${m.title} — ${target.label} (${dist}m)`;
-}
+  const DEFS = [
+    {
+      title: 'Welcome to Solmar',
+      reward: 300,
+      brief: 'Carmen: "You made it to the bay, primo. Wheels up — get yourself a car and come see me at my bar on the Beachfront. We talk business face to face."',
+      steps: [goto(PLACES.bar, 8, "Drive to Carmen's Bar on the Beachfront")],
+    },
+    {
+      title: 'Pizza Run',
+      reward: 450,
+      brief: 'Carmen: "The diner owes me a favour and tonight I collect in pepperoni. Pick up the pizzas and drop them at my three buyers — hot, and before the clock runs out."',
+      timer: 200,
+      steps: [
+        goto({ x: -78, z: 96 }, 6, 'Pick up the pizzas at Bay General Diner'),
+        goto({ x: 66, z: 156 }, 7, 'Deliver to the Beachfront buyer'),
+        goto({ x: -126, z: 66 }, 7, 'Deliver to the Downtown buyer'),
+        goto({ x: 156, z: -30 }, 7, 'Deliver to the Industrial buyer'),
+      ],
+    },
+    {
+      title: 'Getaway Driver',
+      reward: 800,
+      brief: 'Carmen: "My crew walks out of Solmar Trust with heavy bags and no ride. Be at the door, wait while they load, then lose the law and reach the Hills hideout."',
+      steps: [
+        goto(PLACES.bank, 9, 'Get to Solmar Trust Bank'),
+        {
+          text: 'Wait while the crew loads up',
+          marker: { x: PLACES.bank.door.x, z: PLACES.bank.door.z },
+          radius: 10,
+          dwell: 3,
+          check() {
+            return this.dwellDone ? 'done' : null;
+          },
+        },
+        {
+          text: 'Lose the law and reach the Hills hideout',
+          marker: { x: PLACES.hideout.door.x, z: PLACES.hideout.door.z },
+          radius: 10,
+          start() {
+            G.police.addHeat(PLACES.bank.x, PLACES.bank.z, 52);
+            G.hud.toast('The crew is in — GO!', 2.4);
+          },
+          check() {
+            const f = G.playerFocus();
+            return Math.hypot(f.x - PLACES.hideout.door.x, f.z - PLACES.hideout.door.z) < 8 ? 'done' : null;
+          },
+        },
+      ],
+    },
+    {
+      title: 'Turf War',
+      reward: 900,
+      brief: 'Carmen: "Los Tiburones are selling on my Old Town block like they own it. Five of them. Correct that impression — the Gun Runner on that side of town sells what you need."',
+      steps: [
+        goto({ x: 30, z: -100 }, 16, 'Reach the Tiburones block in Old Town'),
+        {
+          ...killStep('m4', { x: 30, z: -100 }, 'Clear the Tiburones off the block'),
+          start() {
+            for (const [ox, oz] of [
+              [0, 0],
+              [8, 5],
+              [-7, 6],
+              [5, -8],
+              [-6, -6],
+            ]) {
+              G.combat.spawnHostile('gang', 30 + ox, -100 + oz, { tag: 'm4' });
+            }
+          },
+        },
+      ],
+    },
+    {
+      title: 'The Drop',
+      reward: 1100,
+      brief: 'Carmen: "A package comes in at Pier 9 tonight. Collect it, take it to Duarte Garage, and do not stop for anybody — the harbour patrol has been paid to be curious."',
+      timer: 220,
+      steps: [
+        goto(PLACES.harbor, 9, 'Pick up the package at Pier 9'),
+        {
+          text: 'Deliver the package to Duarte Garage',
+          marker: { x: PLACES.garage.door.x, z: PLACES.garage.door.z },
+          radius: 9,
+          start() {
+            G.police.addHeat(PLACES.harbor.x, PLACES.harbor.z, 26);
+          },
+          check() {
+            const f = G.playerFocus();
+            return Math.hypot(f.x - PLACES.garage.door.x, f.z - PLACES.garage.door.z) < 9 ? 'done' : null;
+          },
+        },
+      ],
+    },
+    {
+      title: 'Repo Job',
+      reward: 1300,
+      brief: 'Carmen: "A gold sports car in Old Town belongs to a man who stopped paying. Take it — gently — and bring it to Duarte Garage with the paint still on it."',
+      steps: [
+        {
+          text: 'Steal the gold sports car in Old Town',
+          markerFn: () => (data.repoCar ? { x: data.repoCar.x, z: data.repoCar.z } : { x: 60, z: -186 }),
+          radius: 4,
+          start() {
+            data.repoCar = G.vehicles.spawnCar(60, -186, Math.PI / 2, 'marked', 0xd4af37);
+          },
+          check() {
+            return data.repoCar && G.playerCar === data.repoCar ? 'done' : null;
+          },
+        },
+        {
+          text: 'Deliver it to Duarte Garage — keep it alive',
+          marker: { x: PLACES.garage.door.x, z: PLACES.garage.door.z },
+          radius: 10,
+          check() {
+            if (data.repoCar && data.repoCar.dead) return 'fail';
+            const f = G.playerFocus();
+            return G.playerCar === data.repoCar && Math.hypot(f.x - PLACES.garage.door.x, f.z - PLACES.garage.door.z) < 10 ? 'done' : null;
+          },
+        },
+      ],
+    },
+    {
+      title: 'Harbor Heist',
+      reward: 2200,
+      brief: 'Carmen: "The Tiburones keep their cash in a container at Pier 9. Six guards, one strongbox. Take the money and disappear into the Hills — every badge in the Marina will be awake."',
+      steps: [
+        goto(PLACES.harbor, 11, 'Get to Pier 9'),
+        {
+          ...killStep('m7', PLACES.harbor, 'Clear the pier guards'),
+          start() {
+            for (const [ox, oz] of [
+              [-8, 14],
+              [6, 20],
+              [-3, 30],
+              [9, 36],
+              [-10, 42],
+              [2, 48],
+            ]) {
+              G.combat.spawnHostile('gang', PLACES.harbor.x + ox, PLACES.harbor.z + oz, { tag: 'm7' });
+            }
+          },
+        },
+        goto({ x: PLACES.harbor.x + 4, z: 262 }, 5, 'Grab the strongbox'),
+        {
+          text: 'Escape to the Hills hideout',
+          marker: { x: PLACES.hideout.door.x, z: PLACES.hideout.door.z },
+          radius: 10,
+          start() {
+            G.police.addHeat(PLACES.harbor.x, PLACES.harbor.z, 66);
+            G.hud.toast('The whole Marina is awake — RUN!', 2.6);
+          },
+          check() {
+            const f = G.playerFocus();
+            return Math.hypot(f.x - PLACES.hideout.door.x, f.z - PLACES.hideout.door.z) < 8 ? 'done' : null;
+          },
+        },
+      ],
+    },
+    {
+      title: 'King of the Bay',
+      reward: 5000,
+      brief: 'Carmen: "Tonight it ends. The Tiburones HQ in Old Town — El Tiburón himself is home, and he does not travel light. Finish it, then meet me at the Marina lookout. The bay is watching."',
+      steps: [
+        goto(PLACES.hq, 13, 'Reach the Tiburones HQ'),
+        {
+          ...killStep('m8', PLACES.hq, 'Take down El Tiburón and his guard'),
+          start() {
+            for (const [ox, oz] of [
+              [10, 4],
+              [-9, 8],
+              [6, -10],
+              [-12, -6],
+              [14, 12],
+              [-4, 14],
+              [0, -14],
+            ]) {
+              G.combat.spawnHostile('gang', PLACES.hq.x + ox, PLACES.hq.z + oz, { tag: 'm8' });
+            }
+            G.combat.spawnHostile('gang', PLACES.hq.x, PLACES.hq.z, { tag: 'm8', boss: true, hp: 320 });
+          },
+        },
+        goto(PLACES.victory, 9, 'Meet Carmen at the Marina lookout'),
+      ],
+    },
+  ];
 
-export function distanceTo(state, target) {
-  const p = state.player;
-  const x = p.onFoot ? p.x : p.car.x;
-  const z = p.onFoot ? p.z : p.car.z;
-  return Math.hypot(target.x - x, target.z - z);
-}
+  const data = { repoCar: null };
+  let index = 0; // next mission to offer
+  let active = null; // { def, stepIndex, step, missionT, dwellT }
+  let marker = null;
+  let markerDist = 0;
+  let objectiveText = '';
 
-export function startMission(state, index, rng, audio) {
-  const m = MISSIONS[index];
-  if (!m) return;
-  state.missionIndex = index;
-  state.missionStage = 0;
-  state.missionTimer = m.timeLimit || 0;
-  state.missionFailed = false;
-  state.missionComplete = false;
-  // Clear old enemies.
-  for (const e of state.enemies) { e.alive = false; e.mesh.visible = false; }
-  state.enemies = [];
-  if (m.type === 'combat') {
-    for (let i = 0; i < m.enemies; i += 1) {
-      const a = (i / m.enemies) * Math.PI * 2;
-      state.enemies.push(spawnEnemy(state.scene, rng, m.target.x + Math.sin(a) * 12, m.target.z + Math.cos(a) * 12));
+  function currentStep() {
+    return active ? active.def.steps[active.stepIndex] : null;
+  }
+
+  function beginStep() {
+    const step = currentStep();
+    active.dwellT = 0;
+    if (step) step.dwellDone = false;
+    if (step && step.start) step.start();
+    refreshObjective();
+  }
+
+  function refreshObjective() {
+    const step = currentStep();
+    objectiveText = step ? step.text : '';
+    marker = step ? (step.markerFn ? step.markerFn() : step.marker) : null;
+  }
+
+  function cleanup(def) {
+    G.combat.clearTag('m4');
+    G.combat.clearTag('m7');
+    G.combat.clearTag('m8');
+    if (data.repoCar && G.playerCar !== data.repoCar) {
+      G.vehicles.removeCar(data.repoCar);
     }
+    if (def) void def;
+    data.repoCar = null;
   }
-  if (m.id === 3) {
-    addWanted(state, 0, '');
-    state.message = 'Crew picked up — now lose the heat!';
-  }
-  if (m.id === 4) state.player.unlocked.shotgun = true;
-  if (m.id === 6) state.player.unlocked.rifle = true;
-  state.message = `Mission ${m.id}: ${m.title} — ${m.brief}`;
-  if (audio) audio.jingle();
-  updateBeacon(state);
-}
 
-export function updateBeacon(state) {
-  const m = MISSIONS[state.missionIndex];
-  if (!m || !state.city || !state.city.beacon) return;
-  const stage = state.missionStage || 0;
-  const target = stage === 1 && m.thenTarget ? m.thenTarget : m.target;
-  state.city.beacon.position.set(target.x, 0, target.z);
-  state.city.beacon.visible = true;
-}
-
-export function completeMission(state, audio) {
-  const m = MISSIONS[state.missionIndex];
-  if (!m) return;
-  state.player.cash += m.reward;
-  state.stats.cashEarned += m.reward;
-  state.missionsDone += 1;
-  state.missionComplete = true;
-  state.message = `Mission complete: ${m.title} — +$${m.reward}!`;
-  if (audio) audio.jingle();
-  if (state.city && state.city.beacon) state.city.beacon.visible = false;
-}
-
-export function failMission(state, reason, audio) {
-  state.missionFailed = true;
-  state.message = `Mission failed: ${reason} — press R to retry the mission.`;
-  if (audio) audio.fail();
-}
-
-export function retryMission(state, rng, audio) {
-  startMission(state, state.missionIndex, rng, audio);
-  state.missionFailed = false;
-}
-
-// Called every frame while playing. Returns 'victory' when mission 8 ends.
-export function updateMissions(state, dt, rng, audio) {
-  const m = MISSIONS[state.missionIndex];
-  if (!m) return null;
-  if (state.missionFailed) return null;
-  if (m.timeLimit) {
-    state.missionTimer -= dt;
-    if (state.missionTimer <= 0) {
-      failMission(state, 'Out of time', audio);
-      return null;
-    }
-  }
-  const stage = state.missionStage || 0;
-  const target = stage === 1 && m.thenTarget ? m.thenTarget : m.target;
-  const dist = distanceTo(state, target);
-
-  if (m.type === 'combat') {
-    const alive = state.enemies.filter((e) => e.alive).length;
-    if (alive === 0) {
-      if (m.thenTarget && stage === 0) {
-        state.missionStage = 1;
-        updateBeacon(state);
-        state.message = `Area clear — now get to ${m.thenTarget.label}!`;
-        if (m.id === 7) addWanted(state, 3, 'Harbor heist — 3 stars! Lose them at the bar.');
-      } else {
-        completeMission(state, audio);
-        return advance(state, rng, audio);
+  return {
+    defs: DEFS,
+    get index() {
+      return index;
+    },
+    set index(v) {
+      index = v;
+    },
+    get active() {
+      return active;
+    },
+    get marker() {
+      return marker;
+    },
+    get markerDist() {
+      return markerDist;
+    },
+    get objectiveText() {
+      if (!active) return index < DEFS.length ? `See Carmen — new work at the ${index === 0 ? 'Marina Motel' : 'bar'}` : 'The bay is yours, King.';
+      if (active.def.timer) {
+        const left = Math.max(0, Math.ceil(active.def.timer - active.missionT));
+        return `${objectiveText} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
       }
-    }
-    return null;
-  }
-
-  if (m.type === 'pickup') {
-    if (stage === 0 && dist < 9) {
-      state.missionStage = 1;
-      updateBeacon(state);
-      addWanted(state, 2, 'The crew is in — 2 stars! Lose the cops, then reach the garage.');
-      state.message = 'Crew picked up — lose the heat, then reach the garage.';
-    } else if (stage === 1 && dist < 9) {
-      completeMission(state, audio);
-      return advance(state, rng, audio);
-    }
-    return null;
-  }
-
-  if (m.type === 'steal') {
-    const p = state.player;
-    if (!p.onFoot && p.car && dist < 9) {
-      completeMission(state, audio);
-      return advance(state, rng, audio);
-    }
-    if (p.onFoot && dist < 9) state.message = 'The Sunset GT is here — get in a car and deliver it to the garage.';
-    return null;
-  }
-
-  // drive / timed: reach the marker.
-  if (dist < 9) {
-    completeMission(state, audio);
-    return advance(state, rng, audio);
-  }
-  return null;
-}
-
-function advance(state, rng, audio) {
-  if (state.missionIndex + 1 >= MISSIONS.length) {
-    return 'victory';
-  }
-  startMission(state, state.missionIndex + 1, rng, audio);
-  return null;
+      return objectiveText;
+    },
+    offerPoint() {
+      return index === 0 ? PLACES.motel.door : PLACES.bar.door;
+    },
+    currentDef() {
+      return index < DEFS.length ? DEFS[index] : null;
+    },
+    allDone() {
+      return index >= DEFS.length;
+    },
+    begin() {
+      const def = this.currentDef();
+      if (!def || active) return;
+      active = { def, stepIndex: 0, missionT: 0, dwellT: 0 };
+      beginStep();
+    },
+    fail(reason) {
+      if (!active) return;
+      const def = active.def;
+      active = null;
+      marker = null;
+      objectiveText = '';
+      cleanup(def);
+      G.onMissionFailed(def, reason);
+    },
+    complete() {
+      const def = active.def;
+      active = null;
+      marker = null;
+      objectiveText = '';
+      cleanup(def);
+      index++;
+      G.onMissionComplete(def);
+    },
+    update(dt) {
+      if (!active) return;
+      active.missionT += dt;
+      const step = currentStep();
+      if (!step) return;
+      if (step.markerFn) marker = step.markerFn();
+      const focus = G.playerFocus();
+      if (marker) markerDist = Math.hypot(focus.x - marker.x, focus.z - marker.z);
+      if (active.def.timer && active.missionT > active.def.timer) {
+        this.fail('Out of time.');
+        return;
+      }
+      if (step.dwell) {
+        if (markerDist < step.radius) {
+          active.dwellT += dt;
+          step.dwellDone = active.dwellT >= step.dwell;
+        } else {
+          active.dwellT = 0;
+          step.dwellDone = false;
+        }
+      }
+      const verdict = step.check ? step.check() : null;
+      if (verdict === 'fail') {
+        this.fail('The job fell apart.');
+        return;
+      }
+      if (verdict === 'done') {
+        active.stepIndex++;
+        if (active.stepIndex >= active.def.steps.length) {
+          this.complete();
+        } else {
+          G.audio.blip();
+          beginStep();
+        }
+      }
+    },
+  };
 }

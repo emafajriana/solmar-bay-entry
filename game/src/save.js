@@ -1,40 +1,34 @@
-// Save / load through localStorage: cash, missions completed, best stats.
-// Nothing else is persisted; the city itself is rebuilt from the seed.
+// save.js — the localStorage save: cash, story progress and lifetime
+// stats, so CONTINUE on the title screen picks the bay up where the
+// player left it. Every access is wrapped: a browser that refuses
+// storage (or a headless run) simply plays without saving.
 
-import { SAVE_KEY } from './config.js';
+const KEY = 'solmar-bay-save-v1';
 
 export function loadSave() {
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
+    const raw = window.localStorage.getItem(KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object') return null;
-    return {
-      cash: typeof data.cash === 'number' ? data.cash : 150,
-      missionsDone: typeof data.missionsDone === 'number' ? data.missionsDone : 0,
-      bestCash: typeof data.bestCash === 'number' ? data.bestCash : 0,
-      kills: typeof data.kills === 'number' ? data.kills : 0,
-      carsStolen: typeof data.carsStolen === 'number' ? data.carsStolen : 0,
-    };
+    if (typeof data !== 'object' || data === null) return null;
+    return data;
   } catch {
     return null;
   }
 }
 
-export function writeSave(state) {
+export function storeSave(data) {
   try {
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-      cash: Math.round(state.player.cash),
-      missionsDone: state.missionsDone,
-      bestCash: Math.max(state.bestCash || 0, Math.round(state.player.cash)),
-      kills: state.stats.kills,
-      carsStolen: state.stats.carsStolen,
-    }));
+    window.localStorage.setItem(KEY, JSON.stringify(data));
   } catch {
-    // Storage can be off (private windows): progress then lasts this visit only.
+    // Storage unavailable: the run simply is not saved.
   }
 }
 
 export function clearSave() {
-  try { window.localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+  try {
+    window.localStorage.removeItem(KEY);
+  } catch {
+    // Nothing to clear.
+  }
 }

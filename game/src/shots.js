@@ -1,76 +1,129 @@
-// Screenshot scenes behind ?shot=title|play|chase|mission (with &seed=N).
-// Each one stages a real game state — a fresh world, the real rules run
-// forward for fixed steps with a scripted autopilot — then the caller
-// paints it twice and sets window.__shotReady. Same seed, same frame.
+// shots.js — the staged scenes behind the entry's screenshots. Each
+// scene is named by ?shot=<name>&seed=<n>: the world is built from that
+// seed, the scene is set up here, and main.js then runs a fixed number of
+// fixed-length simulation steps with the autopilot below driving the
+// player, renders twice, and sets window.__shotReady. Same seed, same
+// steps, same picture — every run.
 
-import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { addWanted } from './police.js';
-import { startMission } from './missions.js';
+import { PLACES } from './config.js';
 
-export const SHOT_NAMES = ['title', 'play', 'chase', 'mission'];
-
-function autopilotDrive(game, dt) {
-  // Drive straight up the x=25 road — no steering toward the beacon, so
-  // the car never ploughs into a building block and wrecks the shot.
-  game.testInput.forward = 1;
-  game.testInput.strafe = 0;
+export function parseShot(search) {
+  const params = new URLSearchParams(search);
+  const name = params.get('shot');
+  if (!name) return null;
+  const seed = Number(params.get('seed') ?? 1) || 1;
+  return { name, seed };
 }
 
-export function stageShot(name, game) {
-  const state = game.state;
-  const rng = game.rng;
-  game.startGame(true);
+const STEPS = { title: 120, play: 90, chase: 120, mission: 260 };
+
+export function stageShot(G, name) {
+  const avatar = G.playerAvatar;
+  G.auto = { mode: 'none', target: null };
   if (name === 'title') {
-    state.screen = SCREEN_TITLE;
-    state.time = 12;
-    // Park a car and a few pedestrians in the panorama for the cover.
-    return { screen: SCREEN_TITLE };
+    avatar.x = PLACES.bar.x;
+    avatar.z = PLACES.bar.z;
+    G.shotCam = { cx: -30, cz: 120, r: 200, h: 52, a: 1.35 };
+    G.hud.showScreen('title');
+    G.hud.setHudVisible(false);
+    return STEPS.title;
   }
+  G.hud.showScreen(null);
+  G.hud.setHudVisible(true);
   if (name === 'play') {
-    state.screen = SCREEN_PLAY;
-    // Walk the player up a Downtown street for 6 seconds.
-    game.testInput.forward = 1;
-    for (let i = 0; i < 6 * 60; i += 1) game.stepWorld(1 / 60, true);
-    game.testInput.forward = 0;
-    return { screen: SCREEN_PLAY };
+    // A calm cruise along the beachfront promenade, ocean on the right,
+    // the skyline on the left, the first job waiting at Carmen's bar.
+    const car = G.vehicles.spawnCar(-196, 240, Math.PI / 2, 'traffic', 0xc96f2e);
+    car.occupied = false;
+    G.enterCar(car, true);
+    G.missions.begin(); // "Drive to Carmen's Bar" — objective, marker, minimap
+    avatar.camYaw = car.heading;
+    G.auto = { mode: 'drive', target: { x: -52, z: 238 } }; // waypoint: stay on the promenade
+    return STEPS.play;
   }
   if (name === 'chase') {
-    state.screen = SCREEN_PLAY;
-    // Put the player in the parked car by the spawn, drive straight up
-    // the x=25 road, then add heat. Two police cars are placed on the
-    // road ahead, in frame, as the pursuit closes in.
-    game.debugEnterNearestCar();
-    addWanted(state, 3, '3 stars — Solmar PD in pursuit!');
-    for (let i = 0; i < 4 * 60; i += 1) {
-      autopilotDrive(game, 1 / 60);
-      game.stepWorld(1 / 60, true);
-    }
-    game.testInput.forward = 0;
-    game.testInput.strafe = 0;
-    const car = state.player.car;
-    if (car) {
-      const ahead = state.police.cars.filter((c) => !c.dead).slice(0, 2);
-      ahead.forEach((pc, i) => {
-        pc.x = car.x + (i === 0 ? -4 : 4);
-        pc.z = car.z - 26 - i * 6;
-        pc.angle = 0; // facing south, toward the player
-        pc.speed = 10;
-        pc.mesh.position.set(pc.x, 0, pc.z);
-        pc.mesh.rotation.y = 0;
-      });
-    }
-    return { screen: SCREEN_PLAY };
+    // Start far up the x=0 street so the shot is open-road driving with
+    // the patrol converging behind, not a car parked at the bank wall.
+    const car = G.vehicles.spawnCar(0, 170, Math.PI, 'traffic', 0x2471a3);
+    car.occupied = false;
+    G.enterCar(car, true);
+    G.missions.index = 2;
+    G.missions.begin(); // "Get to Solmar Trust Bank"
+    G.police.addHeat(car.x, car.z, 58); // three stars, patrols inbound
+    avatar.camYaw = car.heading;
+    G.auto = { mode: 'drive', target: null };
+    return STEPS.chase;
   }
-  // mission: Harbor Heist combat at the harbor, wanted level showing.
-  state.screen = SCREEN_PLAY;
-  startMission(state, 6, rng, null);
-  // Stand the player at the harbor edge facing the gangsters (southeast),
-  // then let the fight run 4 s. Enemies spawn around the harbor marker.
-  state.player.x = 163;
-  state.player.z = 163;
-  state.player.yaw = Math.PI / 4;
-  state.player.mesh.position.set(163, 0, 163);
-  addWanted(state, 2, 'Harbor Heist — 2 stars!');
-  for (let i = 0; i < 4 * 60; i += 1) game.stepWorld(1 / 60, true);
-  return { screen: SCREEN_PLAY };
+  if (name === 'mission') {
+    avatar.x = PLACES.harbor.x;
+    avatar.z = PLACES.harbor.z + 10;
+    avatar.camYaw = 0.4;
+    avatar.heading = 0.4;
+    G.profile.owned.rifle = true;
+    G.profile.weapon = 'rifle';
+    G.profile.ammo.rifle = 120;
+    G.missions.index = 6;
+    G.missions.begin(); // Harbor Heist: the pier guards spawn as it advances
+    G.auto = { mode: 'fight', target: null };
+    return STEPS.mission;
+  }
+  return 60;
+}
+
+function wrapAngle(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+// Drives the scripted input for one step, toward the mission marker (or
+// the nearest hostile, when fighting).
+export function driveAutopilot(G, dt) {
+  const input = G.input;
+  input.releaseAll();
+  if (!G.auto || G.auto.mode === 'none') return;
+  const focus = G.playerFocus();
+  if (G.auto.mode === 'fight') {
+    let best = null;
+    let bestD = 60;
+    for (const h of G.combat.hostiles) {
+      if (h.dead) continue;
+      const d = Math.hypot(h.x - focus.x, h.z - focus.z);
+      if (d < bestD) {
+        bestD = d;
+        best = h;
+      }
+    }
+    if (best) {
+      const aim = Math.atan2(best.x - focus.x, best.z - focus.z);
+      G.playerAvatar.heading = aim;
+      G.playerAvatar.camYaw = aim;
+      if (bestD > 16) input.hold('KeyW');
+      else if (bestD < 9) input.hold('KeyS');
+      input.hold('__fire');
+    }
+    return;
+  }
+  const marker = (G.auto && G.auto.target) || G.missions.marker;
+  if (!marker) return;
+  if (G.auto.target && Math.hypot(marker.x - focus.x, marker.z - focus.z) < 8) {
+    G.auto.target = null; // waypoint reached: fall back to the mission marker
+  }
+  const dx = marker.x - focus.x;
+  const dz = marker.z - focus.z;
+  const dist = Math.hypot(dx, dz);
+  const desired = Math.atan2(dx, dz);
+  if (G.auto.mode === 'walk') {
+    G.playerAvatar.camYaw = desired;
+    if (dist > 3) input.hold('KeyW');
+    return;
+  }
+  if (G.auto.mode === 'drive' && G.playerCar) {
+    const diff = wrapAngle(desired - G.playerCar.heading);
+    if (diff > 0.12) input.hold('KeyD');
+    else if (diff < -0.12) input.hold('KeyA');
+    if (dist > 6) input.hold('KeyW');
+    G.playerAvatar.camYaw = G.playerCar.heading;
+  }
+  void dt;
 }
