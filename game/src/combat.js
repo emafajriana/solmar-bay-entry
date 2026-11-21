@@ -1,302 +1,271 @@
-// combat.js — guns, fists, and the people who shoot back. The player
-// fires hitscan weapons from the camera; hostile pedestrians (Tiburones
-// gang members and foot police) advance, strafe and return fire with
-// distance-based accuracy. Dead hostiles fall and sometimes drop cash.
-// Tracers are short-lived lines so every shot can be seen.
+// SOLMAR BAY — combat: fists and firearms, for the player and for anyone
+// shooting back.
+//
+// Player fire is a ray from the camera through the crosshair, tested
+// against pedestrians and gang members (spheres), cars (circles) and the
+// building colliders (which cap the ray's range). Every pellet leaves a
+// tracer that fades over a few frames. Enemy fire is resolved the other
+// way: a hit chance by range, a tracer either way, and an event when the
+// player is struck. Nothing here decides what a hit *means* — events go
+// up to the game, which handles crimes, knockouts and mission kills.
 
-import * as THREE from 'three';
-import { WEAPONS } from './config.js';
-import { makeHumanoid, animateWalk, layDown } from './pedestrians.js';
-import { collideCircle } from './city.js';
+import * as THREE from "three";
+import { WEAPONS } from "./config.js";
+import { audio } from "./audio.js";
 
-const GANG_PALETTE = { shirt: 0x0b525b, pants: 0x101820, cap: 0xff5964 };
-const BOSS_PALETTE = { shirt: 0x5f0f40, pants: 0x101820, cap: 0xffd166, vest: 0x101820 };
-const COP_PALETTE = { shirt: 0x1d3557, pants: 0x14213d, cap: 0x1d3557, vest: 0xe9c46a };
-
-export function createCombat(rng, city, scene) {
-  const hostiles = [];
-  const tracers = [];
-  const pickups = [];
-  const group = new THREE.Group();
-  scene.add(group);
-
-  function addGun(parts) {
-    const gun = new THREE.Mesh(
-      new THREE.BoxGeometry(0.09, 0.14, 0.5),
-      new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.4, metalness: 0.5 }),
-    );
-    gun.position.set(0, -0.62, 0.18);
-    parts.armR.add(gun);
-    parts.armR.rotation.x = -Math.PI / 2 + 0.12;
+export class Combat {
+  constructor(scene, save) {
+    this.scene = scene;
+    this.owned = { fist: true, pistol: !!save.weapons.pistol, shotgun: !!save.weapons.shotgun, rifle: !!save.weapons.rifle };
+    this.mag = { pistol: WEAPONS.pistol.mag, shotgun: WEAPONS.shotgun.mag, rifle: WEAPONS.rifle.mag };
+    this.reserve = { pistol: 36, shotgun: 16, rifle: 60 };
+    this.current = "fist";
+    this.cooldown = 0;
+    this.reloadTimer = 0;
+    this.tracers = [];
+    this.tracerMat = new THREE.LineBasicMaterial({ color: 0xffe9a3, transparent: true, opacity: 0.9 });
   }
 
-  function spawnHostile(kind, x, z, opts = {}) {
-    const palette = kind === 'cop' ? COP_PALETTE : opts.boss ? BOSS_PALETTE : GANG_PALETTE;
-    const parts = makeHumanoid(rng, palette);
-    if (opts.boss) parts.group.scale.setScalar(1.14);
-    addGun(parts);
-    parts.group.position.set(x, 0, z);
-    group.add(parts.group);
-    const hostile = {
-      kind,
-      tag: opts.tag ?? null,
-      boss: !!opts.boss,
-      parts,
-      x,
-      z,
-      heading: rng.range(0, Math.PI * 2),
-      hp: opts.hp ?? (kind === 'cop' ? 60 : 80),
-      dead: false,
-      shootCd: rng.range(0.5, 1.6),
-      strafeDir: rng.sign(),
-      strafeT: rng.range(1.5, 3.5),
-      phase: rng.range(0, 6),
-      speed: kind === 'cop' ? 3.6 : 3.3,
-    };
-    hostiles.push(hostile);
-    return hostile;
+  select(name) {
+    if (this.owned[name]) this.current = name;
   }
 
-  function tracer(from, to, color = 0xffe9a0) {
-    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
-    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85 }));
-    scene.add(line);
-    tracers.push({ line, life: 0.07 });
-  }
-
-  function dropPickup(x, z, amount) {
-    const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.42, 0.42, 0.12, 14),
-      new THREE.MeshStandardMaterial({ color: 0xf4d35e, emissive: 0xa67c00, emissiveIntensity: 0.5, roughness: 0.3, metalness: 0.6 }),
-    );
-    mesh.rotation.x = Math.PI / 2;
-    mesh.position.set(x, 0.7, z);
-    scene.add(mesh);
-    pickups.push({ mesh, x, z, amount, spin: rng.range(0, 6) });
-  }
-
-  function damageHostile(hostile, amount, G) {
-    if (hostile.dead) return;
-    hostile.hp -= amount;
-    if (hostile.hp <= 0) {
-      hostile.dead = true;
-      layDown(hostile.parts);
-      if (hostile.kind === 'gang' && rng.chance(0.5)) {
-        dropPickup(hostile.x, hostile.z, rng.int(20, 95));
+  selectSlot(slot) {
+    for (const [name, w] of Object.entries(WEAPONS)) {
+      if (w.slot === slot && this.owned[name]) {
+        // Slot 3 holds two weapons; pressing it again swaps between them.
+        if (name === this.current) continue;
+        this.current = name;
+        return;
       }
-      if (G && G.onHostileDown) G.onHostileDown(hostile);
     }
   }
 
-  // One shot from the player's current weapon, from the camera's eye.
-  function playerFire(G) {
-    const profile = G.profile;
-    const weaponId = profile.weapon;
-    const weapon = WEAPONS[weaponId];
-    const focus = G.playerFocus();
-    if (weaponId === 'fist') {
-      G.audio.shot('fist');
-      const fx = Math.sin(G.playerAvatar.heading);
-      const fz = Math.cos(G.playerAvatar.heading);
-      const hit = (target, isHostile) => {
-        const dx = target.x - focus.x;
-        const dz = target.z - focus.z;
-        return Math.hypot(dx, dz) < weapon.range && dx * fx + dz * fz > 0;
-      };
-      for (const h of hostiles) if (!h.dead && hit(h, true)) return damageHostile(h, weapon.damage, G);
-      for (const ped of G.peds.list) {
-        if (!ped.dead && hit(ped)) {
-          G.peds.damage(ped, weapon.damage);
-          G.crime('punchCivilian', ped.x, ped.z);
-          G.setPanic(ped.x, ped.z);
-          return;
+  give(name) {
+    this.owned[name] = true;
+    this.mag[name] = WEAPONS[name].mag;
+    this.reserve[name] = Math.max(this.reserve[name], WEAPONS[name].mag * 2);
+    this.current = name;
+  }
+
+  refillAll() {
+    this.reserve.pistol = 72;
+    this.reserve.shotgun = 32;
+    this.reserve.rifle = 120;
+    for (const name of ["pistol", "shotgun", "rifle"]) {
+      if (this.owned[name]) this.mag[name] = WEAPONS[name].mag;
+    }
+  }
+
+  startReload() {
+    const w = WEAPONS[this.current];
+    if (!w || w.mag === Infinity) return;
+    if (this.mag[this.current] >= w.mag || this.reserve[this.current] <= 0) return;
+    if (this.reloadTimer > 0) return;
+    this.reloadTimer = 0.85;
+    audio.reload();
+  }
+
+  tracer(from, to, color = 0xffe9a3) {
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const mat = this.tracerMat.clone();
+    if (color !== 0xffe9a3) mat.color.setHex(color);
+    const line = new THREE.Line(geo, mat);
+    this.scene.add(line);
+    this.tracers.push({ line, life: 0.09 });
+  }
+
+  // The player's trigger. origin/dir come from the camera. Returns true
+  // when a shot (or a swing) actually happened.
+  attack(dt, world, events, origin, dir) {
+    void dt; // the cooldown itself ticks in update()
+    const name = this.current;
+    const w = WEAPONS[name];
+    if (this.reloadTimer > 0) return false;
+    if (name === "fist") {
+      if (this.cooldown > 0) return false;
+      this.cooldown = w.rate;
+      audio.punch();
+      // A swing connects with the nearest person inside arm's reach and
+      // roughly in front of the camera.
+      let best = null;
+      for (const ped of [...world.peds, ...world.cops]) {
+        if (ped.down) continue;
+        const dx = ped.pos.x - origin.x;
+        const dz = ped.pos.z - origin.z;
+        const d = Math.hypot(dx, dz);
+        if (d < w.range && d > 0.01) {
+          const dot = (dx / d) * dir.x + (dz / d) * dir.z;
+          if (dot > 0.45 && (!best || d < best.d)) best = { ped, d };
         }
       }
-      return;
-    }
-    if ((profile.ammo[weaponId] ?? 0) <= 0) {
-      G.audio.dryFire();
-      return;
-    }
-    profile.ammo[weaponId] -= weapon.ammoCost;
-    G.audio.shot(weaponId);
-    G.setPanic(focus.x, focus.z);
-    if (G.police.anyCopWithin(focus.x, focus.z, 34)) G.crime('shotNearPolice', focus.x, focus.z);
-
-    const camera = G.stage.camera;
-    const origin = camera.position.clone();
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    const pellets = weapon.pellets ?? 1;
-    for (let p = 0; p < pellets; p++) {
-      const spread = pellets > 1 ? 0.045 : weaponId === 'rifle' ? 0.008 : 0.004;
-      const d = dir.clone();
-      d.x += rng.range(-spread, spread);
-      d.y += rng.range(-spread, spread) * 0.6;
-      d.z += rng.range(-spread, spread);
-      d.normalize();
-      castRay(G, origin, d, weapon);
-    }
-    G.playerAvatar.camPitch = Math.min(1.15, G.playerAvatar.camPitch + 0.01);
-  }
-
-  function rayHits(origin, dir, cx, cy, cz, radius, maxRange) {
-    const ox = cx - origin.x;
-    const oy = cy - origin.y;
-    const oz = cz - origin.z;
-    const t = ox * dir.x + oy * dir.y + oz * dir.z;
-    if (t < 0.5 || t > maxRange) return -1;
-    const px = origin.x + dir.x * t;
-    const py = origin.y + dir.y * t;
-    const pz = origin.z + dir.z * t;
-    const miss = Math.hypot(cx - px, cy - py, cz - pz);
-    return miss <= radius ? t : -1;
-  }
-
-  function castRay(G, origin, dir, weapon) {
-    let bestT = weapon.range;
-    let bestHit = null;
-    const consider = (x, y, z, radius, apply) => {
-      const t = rayHits(origin, dir, x, y, z, radius, weapon.range);
-      if (t > 0 && t < bestT) {
-        bestT = t;
-        bestHit = apply;
-      }
-    };
-    for (const h of hostiles) {
-      if (h.dead) continue;
-      consider(h.x, 1.05, h.z, 0.62, () => damageHostile(h, weapon.damage, G));
-    }
-    for (const ped of G.peds.list) {
-      if (ped.dead) continue;
-      consider(ped.x, 1.05, ped.z, 0.58, () => {
-        const wasAlive = !ped.dead;
-        G.peds.damage(ped, weapon.damage);
-        if (wasAlive && ped.dead) G.crime('killPedestrian', ped.x, ped.z);
-        else G.crime('hitPedestrian', ped.x, ped.z);
-      });
-    }
-    for (const car of G.vehicles.cars) {
-      consider(car.x, 0.75, car.z, 2.1, () => G.vehicles.damageCar(car, weapon.damage * 0.7));
-    }
-    const end = origin.clone().add(dir.clone().multiplyScalar(bestT));
-    const gunPos =
-      G.profile.mode === 'foot'
-        ? [G.playerAvatar.x + Math.sin(G.playerAvatar.camYaw) * 0.5, 1.45, G.playerAvatar.z + Math.cos(G.playerAvatar.camYaw) * 0.5]
-        : [G.playerCar.x, 1.2, G.playerCar.z];
-    tracer(gunPos, [end.x, end.y, end.z]);
-    if (bestHit) bestHit();
-  }
-
-  function updateHostile(hostile, dt, G) {
-    const focus = G.playerFocus();
-    const dx = focus.x - hostile.x;
-    const dz = focus.z - hostile.z;
-    const dist = Math.hypot(dx, dz) || 1;
-    // A foot officer with no wanted level to enforce walks away and
-    // holsters: police.js clears them out once they are far enough.
-    if (hostile.kind === 'cop' && G.police && !G.police.wantedActive()) {
-      hostile.x -= (dx / dist) * hostile.speed * dt;
-      hostile.z -= (dz / dist) * hostile.speed * dt;
-      hostile.heading = Math.atan2(-dx, -dz);
-      hostile.phase += hostile.speed * dt * 2.4;
-      animateWalk(hostile.parts, hostile.phase, 1);
-      hostile.parts.group.position.set(hostile.x, 0, hostile.z);
-      hostile.parts.group.rotation.y = hostile.heading;
-      return;
-    }
-    const wantRange = hostile.kind === 'cop' ? 24 : 19;
-    let mx = 0;
-    let mz = 0;
-    if (dist > wantRange + 5) {
-      mx = dx / dist;
-      mz = dz / dist;
-    } else if (dist < wantRange - 7) {
-      mx = -dx / dist;
-      mz = -dz / dist;
-    }
-    hostile.strafeT -= dt;
-    if (hostile.strafeT <= 0) {
-      hostile.strafeT = rng.range(1.5, 3.5);
-      hostile.strafeDir = rng.sign();
-    }
-    mx += (-dz / dist) * hostile.strafeDir * 0.45;
-    mz += (dx / dist) * hostile.strafeDir * 0.45;
-    const mLen = Math.hypot(mx, mz);
-    if (mLen > 0.05) {
-      hostile.x += (mx / mLen) * hostile.speed * dt;
-      hostile.z += (mz / mLen) * hostile.speed * dt;
-      const [nx, nz] = collideCircle(city, hostile.x, hostile.z, 0.45);
-      hostile.x = nx;
-      hostile.z = nz;
-      hostile.phase += hostile.speed * dt * 2.4;
-      animateWalk(hostile.parts, hostile.phase, 1);
-    }
-    hostile.heading = Math.atan2(dx, dz);
-    hostile.parts.group.position.set(hostile.x, 0, hostile.z);
-    hostile.parts.group.rotation.y = hostile.heading;
-
-    hostile.shootCd -= dt;
-    const gunRange = hostile.boss ? 46 : 38;
-    if (dist < gunRange && hostile.shootCd <= 0) {
-      hostile.shootCd = hostile.boss ? rng.range(0.55, 0.9) : rng.range(0.8, 1.5);
-      const hitChance = Math.max(0.08, 0.52 - dist * 0.009 + (hostile.boss ? 0.12 : 0));
-      const from = [hostile.x, 1.35, hostile.z];
-      if (rng.chance(hitChance)) {
-        tracer(from, [focus.x, 1.1, focus.z], 0xff9d7a);
-        G.hurtPlayer(rng.range(5, hostile.boss ? 13 : 10), hostile.x, hostile.z);
+      if (best) {
+        best.ped.hurt(w.damage, events, "punch");
+        events.push({ type: "punchHit", x: best.ped.pos.x, z: best.ped.pos.z });
+        audio.thud();
       } else {
-        tracer(from, [focus.x + rng.range(-2.5, 2.5), rng.range(0.4, 2), focus.z + rng.range(-2.5, 2.5)], 0xff9d7a);
+        events.push({ type: "punchAir", x: origin.x + dir.x * 2, z: origin.z + dir.z * 2 });
       }
-      G.audio.shot('pistol');
+      return true;
+    }
+    if (this.cooldown > 0) return false;
+    if (this.mag[name] <= 0) {
+      this.cooldown = 0.3;
+      audio.dryFire();
+      this.startReload();
+      return false;
+    }
+    this.cooldown = w.rate;
+    this.mag[name]--;
+    audio.shot(name);
+    events.push({ type: "shot", weapon: name, x: origin.x, z: origin.z });
+    for (let p = 0; p < w.pellets; p++) {
+      const d = new THREE.Vector3(
+        dir.x + (Math.random() - 0.5) * 2 * w.spread,
+        dir.y + (Math.random() - 0.5) * 2 * w.spread,
+        dir.z + (Math.random() - 0.5) * 2 * w.spread
+      ).normalize();
+      this.fireRay(world, events, origin, d, w, name);
+    }
+    if (this.mag[name] <= 0) this.startReload();
+    return true;
+  }
+
+  fireRay(world, events, origin, dir, w, weaponName) {
+    let range = w.range;
+    // Buildings cap the ray.
+    for (const c of world.colliders) {
+      const t = rayAabb(origin, dir, c);
+      if (t !== null && t < range) range = t;
+    }
+    const end = new THREE.Vector3(origin.x + dir.x * range, origin.y + dir.y * range, origin.z + dir.z * range);
+    let hitSomething = false;
+    // People: a body sphere and a head sphere (head hits count double).
+    for (const ped of [...world.peds, ...world.cops]) {
+      if (ped.down) continue;
+      const bodyC = new THREE.Vector3(ped.pos.x, ped.pos.y + 1.05, ped.pos.z);
+      const headC = new THREE.Vector3(ped.pos.x, ped.pos.y + 1.68, ped.pos.z);
+      const tBody = raySphere(origin, dir, bodyC, 0.62);
+      const tHead = raySphere(origin, dir, headC, 0.3);
+      const t = tHead !== null ? tHead : tBody;
+      if (t !== null && t <= range) {
+        ped.hurt(w.damage * (tHead !== null ? 2 : 1), events, "shot");
+        events.push({ type: "pedHit", ped, weapon: weaponName, x: ped.pos.x, z: ped.pos.z });
+        hitSomething = true;
+      }
+    }
+    // Cars: a squat cylinder test in the ground plane.
+    for (const car of world.cars) {
+      const dx = car.pos.x - origin.x;
+      const dz = car.pos.z - origin.z;
+      const along = dx * dir.x + dz * dir.z;
+      if (along < 0 || along > range) continue;
+      const px = origin.x + dir.x * along;
+      const pz = origin.z + dir.z * along;
+      if (Math.hypot(car.pos.x - px, car.pos.z - pz) < 2.3) {
+        car.health = Math.max(0, car.health - w.damage * 0.7);
+        events.push({ type: "carShot", car, x: car.pos.x, z: car.pos.z });
+        hitSomething = true;
+      }
+    }
+    void hitSomething;
+    const muzzle = new THREE.Vector3(origin.x + dir.x * 0.7, origin.y - 0.12, origin.z + dir.z * 0.7);
+    this.tracer(muzzle, end, 0xffe9a3);
+  }
+
+  // An enemy (gang member or foot cop) fires at a target position.
+  enemyShoot(shooter, target, world, events, now) {
+    if (shooter.reload > now) return;
+    shooter.reload = now + 0.9 + Math.random() * 0.7;
+    const from = new THREE.Vector3(shooter.pos.x, shooter.pos.y + 1.35, shooter.pos.z);
+    const dist = Math.hypot(target.x - shooter.pos.x, target.z - shooter.pos.z);
+    const aim = new THREE.Vector3(
+      target.x + (Math.random() - 0.5) * 2.4,
+      1.1,
+      target.z + (Math.random() - 0.5) * 2.4
+    );
+    this.tracer(from, aim, 0xff9a7a);
+    audio.shot("pistol");
+    events.push({ type: "shot", weapon: "pistol", x: shooter.pos.x, z: shooter.pos.z, enemy: true });
+    const hitChance = Math.max(0.04, 0.42 - dist * 0.008);
+    if (Math.random() < hitChance) {
+      events.push({ type: "playerShot", amount: 5 + Math.random() * 6, x: target.x, z: target.z });
     }
   }
 
-  return {
-    hostiles,
-    pickups,
-    spawnHostile,
-    playerFire,
-    damageHostile,
-    countAlive(tag) {
-      return hostiles.filter((h) => !h.dead && (tag === undefined || h.tag === tag)).length;
-    },
-    clearTag(tag) {
-      for (let i = hostiles.length - 1; i >= 0; i--) {
-        if (hostiles[i].tag === tag) {
-          group.remove(hostiles[i].parts.group);
-          hostiles.splice(i, 1);
+  update(dt) {
+    if (this.cooldown > 0) this.cooldown -= dt;
+    if (this.reloadTimer > 0) {
+      this.reloadTimer -= dt;
+      if (this.reloadTimer <= 0) {
+        const name = this.current;
+        const w = WEAPONS[name];
+        if (w && w.mag !== Infinity) {
+          const need = w.mag - this.mag[name];
+          const take = Math.min(need, this.reserve[name]);
+          this.mag[name] += take;
+          this.reserve[name] -= take;
         }
       }
-    },
-    update(dt, G) {
-      for (const hostile of hostiles) {
-        if (!hostile.dead) updateHostile(hostile, dt, G);
+    }
+    for (let i = this.tracers.length - 1; i >= 0; i--) {
+      const t = this.tracers[i];
+      t.life -= dt;
+      t.line.material.opacity = Math.max(0, t.life / 0.09) * 0.9;
+      if (t.life <= 0) {
+        this.scene.remove(t.line);
+        t.line.geometry.dispose();
+        t.line.material.dispose();
+        this.tracers.splice(i, 1);
       }
-      for (let i = tracers.length - 1; i >= 0; i--) {
-        const t = tracers[i];
-        t.life -= dt;
-        t.line.material.opacity = Math.max(0, t.life / 0.07) * 0.85;
-        if (t.life <= 0) {
-          scene.remove(t.line);
-          t.line.geometry.dispose();
-          t.line.material.dispose();
-          tracers.splice(i, 1);
-        }
-      }
-      const focus = G.playerFocus();
-      for (let i = pickups.length - 1; i >= 0; i--) {
-        const pickup = pickups[i];
-        pickup.spin += dt * 3;
-        pickup.mesh.rotation.z = pickup.spin;
-        pickup.mesh.position.y = 0.7 + Math.sin(pickup.spin * 1.7) * 0.12;
-        if (Math.hypot(pickup.x - focus.x, pickup.z - focus.z) < 1.9) {
-          G.addCash(pickup.amount);
-          G.audio.cash();
-          scene.remove(pickup.mesh);
-          pickups.splice(i, 1);
-        }
-      }
-    },
-  };
+    }
+  }
+
+  hudState() {
+    const w = WEAPONS[this.current];
+    return {
+      weapon: w.name,
+      mag: w.mag === Infinity ? "—" : this.mag[this.current],
+      reserve: w.mag === Infinity ? "—" : this.reserve[this.current],
+      reloading: this.reloadTimer > 0,
+    };
+  }
+}
+
+function raySphere(origin, dir, center, radius) {
+  const ox = center.x - origin.x;
+  const oy = center.y - origin.y;
+  const oz = center.z - origin.z;
+  const t = ox * dir.x + oy * dir.y + oz * dir.z;
+  if (t < 0) return null;
+  const px = origin.x + dir.x * t;
+  const py = origin.y + dir.y * t;
+  const pz = origin.z + dir.z * t;
+  const d2 = (center.x - px) ** 2 + (center.y - py) ** 2 + (center.z - pz) ** 2;
+  if (d2 > radius * radius) return null;
+  return t;
+}
+
+function rayAabb(origin, dir, c) {
+  // Ground-plane slab test: the shot's height at the box is checked loosely
+  // (buildings are tall; a level shot always meets them).
+  let tmin = 0;
+  let tmax = Infinity;
+  const axes = [
+    [origin.x, dir.x, c.x0, c.x1],
+    [origin.z, dir.z, c.z0, c.z1],
+  ];
+  for (const [o, d, lo, hi] of axes) {
+    if (Math.abs(d) < 1e-9) {
+      if (o < lo || o > hi) return null;
+    } else {
+      let t1 = (lo - o) / d;
+      let t2 = (hi - o) / d;
+      if (t1 > t2) [t1, t2] = [t2, t1];
+      tmin = Math.max(tmin, t1);
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return null;
+    }
+  }
+  return tmin;
 }

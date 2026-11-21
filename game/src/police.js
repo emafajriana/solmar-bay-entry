@@ -1,246 +1,305 @@
-// police.js — the law, and SOLMAR BAY's signature system: DISTRICT HEAT.
+// SOLMAR BAY — District Heat, the wanted level, and the Solmar PD.
 //
-// Each of the six districts keeps its own heat meter (0..100). A crime
-// raises the heat of the district it happens in — and only that district.
-// Your wanted stars are read off the heat of the district you are standing
-// in (plus a whisper of your worst heat elsewhere), so the map itself is
-// the wanted system: cross into a cool district and the pressure drops,
-// while the district you just terrorised stays hot, patrols hard and
-// charges more at the Pay'n'Spray. Heat cools slowly everywhere, but the
-// district you are in only cools while no officer can see you.
+// THE SIGNATURE SYSTEM. The city is six districts and each one keeps its
+// own heat, 0 to 100. A crime raises the heat of the district it happens
+// in — and only that district. The stars over the player's head are read
+// from the heat of the district the player is standing in, so the hunt is
+// a property of the map, not of the player: flee a boiling district into
+// a cool one and the stars fall, while the district you left stays hot on
+// the minimap and keeps its patrols. Every district cools at its own rate
+// (Downtown slowest — cameras — the Hills fastest), cooling pauses while
+// the police have eyes on the player, and a respray at Shine Auto washes
+// the current district clean and halves the rest.
 //
-// This module owns the heat, the star rating, the pursuit cars (built by
-// vehicles.js, steered here), the foot police (spawned through
-// combat.js), the roadblocks at four stars, and the busted meter.
+// The PD itself: pursuit cars that steer for the player and ram, foot
+// cops from two stars who close in and shoot from three, roadblocks
+// across the street from four, and a bust meter that fills when a unit is
+// on top of a player who has stopped running.
 
-import { DISTRICTS, TUNING, CRIME_HEAT, districtAt } from './config.js';
-import { collideCircle } from './city.js';
+import * as THREE from "three";
+import { DISTRICTS, districtAt, starsForHeat, CRIME_HEAT, streetCenter, GRID, EXTENT } from "./config.js";
+import { Car } from "./vehicles.js";
+import { Ped } from "./pedestrians.js";
+import { resolveCollisions } from "./city.js";
 
-export function createPolice(rng, city, vehicles, combat) {
-  const heat = {};
-  for (const d of DISTRICTS) heat[d.id] = 0;
-  let bustMeter = 0;
-  let spawnCd = 0;
-  let roadblockCd = 0;
-  let starsNow = 0;
+const CARS_BY_STARS = [0, 2, 3, 4, 5, 6];
+const COPS_BY_STARS = [0, 0, 1, 2, 3, 3];
 
-  function effectiveHeat(x, z) {
+export class Police {
+  constructor(scene, rng) {
+    this.scene = scene;
+    this.rng = rng;
+    this.heat = new Map(DISTRICTS.map((d) => [d.id, 0]));
+    this.lastCrimeAt = new Map(DISTRICTS.map((d) => [d.id, -99]));
+    this.cars = [];
+    this.cops = [];
+    this.blocks = [];
+    this.seenAgo = 99; // seconds since any unit last saw the player
+    this.bustMeter = 0;
+    this.spawnTimer = 0;
+    this.stars = 0;
+    this.playerDistrict = DISTRICTS[3];
+  }
+
+  heatOf(id) {
+    return this.heat.get(id) || 0;
+  }
+
+  addCrime(kind, x, z, now) {
+    const d = districtAt(x, z);
+    const add = CRIME_HEAT[kind] || 0;
+    if (add > 0) {
+      this.heat.set(d.id, Math.min(100, this.heatOf(d.id) + add));
+      this.lastCrimeAt.set(d.id, now);
+    }
+    return d;
+  }
+
+  // Manually bleed heat out of the district containing a point — used
+  // when the player is properly hidden somewhere the PD cannot reach.
+  cool(x, z, amount) {
+    const d = districtAt(x, z);
+    this.heat.set(d.id, Math.max(0, this.heatOf(d.id) - amount));
+  }
+
+  // The Pay'n'Spray wash: this district clean, the rest halved.
+  wash(x, z) {
     const here = districtAt(x, z);
-    let worstElsewhere = 0;
     for (const d of DISTRICTS) {
-      if (d.id !== here.id) worstElsewhere = Math.max(worstElsewhere, heat[d.id]);
+      const h = this.heatOf(d.id);
+      this.heat.set(d.id, d.id === here.id ? 0 : h * 0.5);
     }
-    return heat[here.id] + worstElsewhere * 0.25;
+    this.bustMeter = 0;
   }
 
-  function starsFor(x, z) {
-    const eff = effectiveHeat(x, z);
-    let stars = 0;
-    for (const threshold of TUNING.starThresholds) if (eff >= threshold) stars++;
-    return stars;
+  clearAll() {
+    for (const d of DISTRICTS) this.heat.set(d.id, 0);
+    this.removeUnits();
+    this.bustMeter = 0;
+    this.stars = 0;
   }
 
-  function copCars() {
-    return vehicles.cars.filter((c) => c.kind === 'cop' && !c.dead);
+  removeUnits() {
+    for (const car of [...this.cars, ...this.blocks]) this.scene.remove(car.mesh);
+    for (const cop of this.cops) this.scene.remove(cop.mesh);
+    this.cars = [];
+    this.blocks = [];
+    this.cops = [];
   }
 
-  function footCops() {
-    return combat.hostiles.filter((h) => h.kind === 'cop' && !h.dead);
+  allCars() {
+    return [...this.cars, ...this.blocks];
   }
 
-  function spawnCopCar(G) {
-    const focus = G.playerFocus();
-    const angle = rng.range(0, Math.PI * 2);
-    let x = focus.x + Math.cos(angle) * rng.range(52, 68);
-    let z = focus.z + Math.sin(angle) * rng.range(52, 68);
-    x = Math.max(-236, Math.min(236, x));
-    z = Math.max(-236, Math.min(236, z));
-    // Snap to the nearer street line so the car arrives on a road.
-    if (Math.abs(x - Math.round(x / 60) * 60) < Math.abs(z - Math.round(z / 60) * 60)) {
-      x = Math.round(x / 60) * 60;
-    } else {
-      z = Math.round(z / 60) * 60;
+  spawnPointNear(playerPos, minD, maxD) {
+    const a = this.rng.range(0, Math.PI * 2);
+    const r = this.rng.range(minD, maxD);
+    let x = playerPos.x + Math.sin(a) * r;
+    let z = playerPos.z + Math.cos(a) * r;
+    x = Math.max(6, Math.min(EXTENT - 6, x));
+    z = Math.max(6, Math.min(EXTENT - 6, z));
+    // Snap to the nearest street centre line so units arrive on the road.
+    const snap = (v) => streetCenter(Math.max(0, Math.min(GRID, Math.round((v - 8) / 76))));
+    if (this.rng.chance(0.5)) x = snap(x);
+    else z = snap(z);
+    return { x, z };
+  }
+
+  update(dt, world, events) {
+    const now = world.time;
+    const player = world.player;
+    const pPos = player.mode === "car" && player.car ? player.car.pos : player.pos;
+    this.playerDistrict = districtAt(pPos.x, pPos.z);
+
+    // Eyes on the player?
+    let seen = false;
+    for (const car of this.cars) {
+      if (Math.hypot(car.pos.x - pPos.x, car.pos.z - pPos.z) < 60) seen = true;
     }
-    const heading = Math.atan2(focus.x - x, focus.z - z);
-    return vehicles.spawnCar(x, z, heading, 'cop');
-  }
-
-  function spawnFootCop(G) {
-    const focus = G.playerFocus();
-    const angle = rng.range(0, Math.PI * 2);
-    const x = Math.max(-240, Math.min(240, focus.x + Math.cos(angle) * rng.range(24, 34)));
-    const z = Math.max(-240, Math.min(240, focus.z + Math.sin(angle) * rng.range(24, 34)));
-    return combat.spawnHostile('cop', x, z, { tag: 'police' });
-  }
-
-  function steerCopCar(car, dt, G) {
-    const focus = G.playerFocus();
-    let tx = focus.x;
-    let tz = focus.z;
-    if (G.profile.mode === 'car' && G.playerCar) {
-      tx += Math.sin(G.playerCar.heading) * G.playerCar.speed * 0.45;
-      tz += Math.cos(G.playerCar.heading) * G.playerCar.speed * 0.45;
+    for (const cop of this.cops) {
+      if (!cop.down && Math.hypot(cop.pos.x - pPos.x, cop.pos.z - pPos.z) < 45) seen = true;
     }
-    const dx = tx - car.x;
-    const dz = tz - car.z;
-    const dist = Math.hypot(dx, dz) || 1;
-    if (car.roadblockT > 0) {
-      car.roadblockT -= dt;
-      car.speed = Math.max(0, car.speed - 30 * dt);
-    } else {
-      const desired = Math.atan2(dx, dz);
-      let turn = desired - car.heading;
-      while (turn > Math.PI) turn -= Math.PI * 2;
-      while (turn < -Math.PI) turn += Math.PI * 2;
-      car.heading += Math.max(-2.1 * dt, Math.min(2.1 * dt, turn));
-      let want = dist > 55 ? 41 : dist > 22 ? 31 : 24;
-      if (G.profile.mode === 'foot' && dist < 8) want = 0; // pull up, don't run him down
-      if (car.speed < want) car.speed = Math.min(want, car.speed + 17 * dt);
-      else car.speed = Math.max(want, car.speed - 30 * dt);
+    this.seenAgo = seen ? 0 : this.seenAgo + dt;
+
+    // Cooling. A district sheds heat once the sirens have been quiet
+    // there for a while; the district the player is hiding in cools at
+    // half rate while units are near, and not at all under direct gaze.
+    for (const d of DISTRICTS) {
+      let h = this.heatOf(d.id);
+      if (h <= 0) continue;
+      if (now - (this.lastCrimeAt.get(d.id) || -99) < 8) continue;
+      let rate = d.cool;
+      if (d.id === this.playerDistrict.id) {
+        if (this.seenAgo < 2.5) rate = 0;
+        else if (this.cars.length + this.cops.length > 0) rate *= 0.5;
+      }
+      this.heat.set(d.id, Math.max(0, h - rate * dt));
     }
-    car.x += Math.sin(car.heading) * car.speed * dt;
-    car.z += Math.cos(car.heading) * car.speed * dt;
-    const [nx, nz] = collideCircle(city, car.x, car.z, TUNING.carRadius);
-    if (nx !== car.x || nz !== car.z) car.speed *= 0.45;
-    car.x = nx;
-    car.z = nz;
-    const bar = car.mesh.userData.lightbar;
-    if (bar) {
-      const flash = Math.sin(G.time * 10) > 0;
-      bar.red.emissiveIntensity = flash ? 2.4 : 0.1;
-      bar.blue.emissiveIntensity = flash ? 0.1 : 2.4;
+
+    this.stars = starsForHeat(this.heatOf(this.playerDistrict.id));
+    if (world.stats) world.stats.topStars = Math.max(world.stats.topStars, this.stars);
+
+    // Radio ahead: while a chase is live, the district the player has run
+    // into warms slowly — the PD is not stupid, just slower than a car.
+    if (this.stars === 0 && this.seenAgo < 1 && this.cars.length > 0) {
+      const d = this.playerDistrict;
+      this.heat.set(d.id, Math.min(30, this.heatOf(d.id) + 5.5 * dt));
     }
-  }
 
-  return {
-    heat,
-    get starsNow() {
-      return starsNow;
-    },
-    get bustMeter() {
-      return bustMeter;
-    },
-    effectiveHeat,
-    districtHeat(x, z) {
-      return heat[districtAt(x, z).id];
-    },
-    wantedActive() {
-      return starsNow > 0;
-    },
-    anyCopWithin(x, z, r) {
-      for (const car of copCars()) if (Math.hypot(car.x - x, car.z - z) < r) return true;
-      for (const cop of footCops()) if (Math.hypot(cop.x - x, cop.z - z) < r) return true;
-      return false;
-    },
-    addCrime(kind, x, z) {
-      const points = CRIME_HEAT[kind];
-      if (!points) return;
-      const d = districtAt(x, z);
-      heat[d.id] = Math.min(100, heat[d.id] + points);
-    },
-    addHeat(x, z, points) {
-      const d = districtAt(x, z);
-      heat[d.id] = Math.max(0, Math.min(100, heat[d.id] + points));
-    },
-    // Pay'n'Spray: full cool-down where you stand, half everywhere else.
-    resprayCost(x, z) {
-      const d = districtAt(x, z);
-      return Math.round((150 + effectiveHeat(x, z) * 4) * d.sprayMult);
-    },
-    respray(x, z) {
-      const here = districtAt(x, z);
-      for (const d of DISTRICTS) {
-        heat[d.id] = d.id === here.id ? 0 : heat[d.id] * 0.5;
+    this.spawnTimer -= dt;
+    // Spawn and retire pursuit cars.
+    const wantCars = CARS_BY_STARS[this.stars];
+    if (this.cars.length < wantCars && this.spawnTimer <= 0) {
+      this.spawnTimer = 1.6;
+      const s = this.spawnPointNear(pPos, 85, 130);
+      const car = new Car(this.scene, { kind: "police", color: 0x1d2733, x: s.x, z: s.z, angle: this.rng.range(0, 6.28), mode: "police" });
+      this.cars.push(car);
+      world.cars.push(car);
+    }
+    for (let i = this.cars.length - 1; i >= 0; i--) {
+      const car = this.cars[i];
+      const d = Math.hypot(car.pos.x - pPos.x, car.pos.z - pPos.z);
+      if ((d > 300 && this.stars === 0) || d > 420 || car.health <= 0) {
+        this.scene.remove(car.mesh);
+        this.cars.splice(i, 1);
+        const wi = world.cars.indexOf(car);
+        if (wi >= 0) world.cars.splice(wi, 1);
       }
-      bustMeter = 0;
-    },
-    halveAll() {
-      for (const d of DISTRICTS) heat[d.id] *= 0.5;
-    },
-    clearAll() {
-      for (const d of DISTRICTS) heat[d.id] = 0;
-      bustMeter = 0;
-    },
+    }
+    // Foot cops.
+    const wantCops = COPS_BY_STARS[this.stars];
+    if (this.cops.length < wantCops && this.spawnTimer <= 0) {
+      this.spawnTimer = 1.2;
+      const s = this.spawnPointNear(pPos, 38, 60);
+      const cop = new Ped(this.scene, this.rng, { x: s.x, z: s.z, kind: "cop" });
+      cop.stationary = true;
+      this.cops.push(cop);
+      world.cops.push(cop);
+    }
+    for (let i = this.cops.length - 1; i >= 0; i--) {
+      const cop = this.cops[i];
+      const d = Math.hypot(cop.pos.x - pPos.x, cop.pos.z - pPos.z);
+      if (d > 320 || (cop.down && cop.downTimer <= 0)) {
+        this.scene.remove(cop.mesh);
+        this.cops.splice(i, 1);
+        const wi = world.cops.indexOf(cop);
+        if (wi >= 0) world.cops.splice(wi, 1);
+      }
+    }
+    // Roadblocks from four stars: two cars across the street ahead.
+    if (this.stars >= 4 && this.blocks.length === 0 && this.seenAgo < 30) {
+      const ahead = 55;
+      const fx = Math.sin(player.angle);
+      const fz = Math.cos(player.angle);
+      const bx = Math.max(10, Math.min(EXTENT - 10, pPos.x + fx * ahead));
+      const bz = Math.max(10, Math.min(EXTENT - 10, pPos.z + fz * ahead));
+      for (const off of [-3.4, 3.4]) {
+        const car = new Car(this.scene, {
+          kind: "police",
+          color: 0x1d2733,
+          x: bx + Math.cos(player.angle) * off,
+          z: bz - Math.sin(player.angle) * off,
+          angle: player.angle + Math.PI / 2,
+          mode: "parked",
+        });
+        this.blocks.push(car);
+        world.cars.push(car);
+      }
+    }
+    if (this.stars < 4 && this.blocks.length > 0) {
+      for (const car of this.blocks) {
+        this.scene.remove(car.mesh);
+        const wi = world.cars.indexOf(car);
+        if (wi >= 0) world.cars.splice(wi, 1);
+      }
+      this.blocks = [];
+    }
 
-    update(dt, G) {
-      const focus = G.playerFocus();
-      const here = districtAt(focus.x, focus.z);
-      starsNow = starsFor(focus.x, focus.z);
-
-      // Cooling: everywhere slowly; the home district only while unseen.
-      const seen = this.anyCopWithin(focus.x, focus.z, 48);
-      for (const d of DISTRICTS) {
-        if (heat[d.id] <= 0) continue;
-        const frozen = d.id === here.id && seen && starsNow > 0;
-        if (!frozen) heat[d.id] = Math.max(0, heat[d.id] - 0.5 * d.cool * dt);
+    // Drive the pursuit.
+    for (const car of this.cars) {
+      if (car.health <= 0) {
+        car.speed = Math.max(0, car.speed - 18 * dt);
+        continue;
       }
-      starsNow = starsFor(focus.x, focus.z);
-
-      // Manpower follows the stars and the district's patrol strength.
-      const patrol = here.patrol;
-      const wantCars = starsNow === 0 ? 0 : Math.max(1, Math.round((starsNow + 1) * patrol));
-      const wantFoot = starsNow >= 2 ? Math.round((starsNow - 1) * patrol) : 0;
-      spawnCd -= dt;
-      const carsNow = copCars();
-      if (spawnCd <= 0 && carsNow.length < wantCars) {
-        spawnCopCar(G);
-        spawnCd = 1.4;
-      }
-      if (spawnCd <= 0 && footCops().length < wantFoot) {
-        spawnFootCop(G);
-        spawnCd = 1.4;
-      }
-      // Surplus or distant units fall back and leave the world.
-      for (const car of carsNow) {
-        const dist = Math.hypot(car.x - focus.x, car.z - focus.z);
-        if ((carsNow.length > wantCars && dist > 60) || dist > 150) {
-          vehicles.removeCar(car);
-        }
-      }
-      if (starsNow === 0 && footCops().length > 0) {
-        combat.clearTag('police');
-      }
-
-      // Roadblocks at four stars: two units parked across the road ahead.
-      roadblockCd -= dt;
-      if (starsNow >= 4 && G.profile.mode === 'car' && G.playerCar && roadblockCd <= 0) {
-        roadblockCd = 26;
-        const car = G.playerCar;
-        const ax = car.x + Math.sin(car.heading) * 48;
-        const az = car.z + Math.cos(car.heading) * 48;
-        for (const side of [-2.2, 2.2]) {
-          const block = vehicles.spawnCar(
-            ax + Math.cos(car.heading) * side,
-            az - Math.sin(car.heading) * side,
-            car.heading + Math.PI / 2,
-            'cop',
-          );
-          block.roadblockT = 11;
-        }
-      }
-
-      for (const car of copCars()) steerCopCar(car, dt, G);
-
-      // The busted meter fills while an officer is on top of a slow or
-      // on-foot player; it drains when they break away. A staged
-      // screenshot never ends in an arrest — the shoot is a photo op.
-      if (starsNow > 0 && G.state !== 'shot') {
-        const slow = G.profile.mode === 'foot' || !G.playerCar || Math.abs(G.playerCar.speed) < 1.3;
-        const near =
-          copCars().some((c) => Math.hypot(c.x - focus.x, c.z - focus.z) < TUNING.bustRange + 1.6) ||
-          footCops().some((c) => Math.hypot(c.x - focus.x, c.z - focus.z) < TUNING.bustRange);
-        if (slow && near) {
-          bustMeter += dt;
-          if (bustMeter >= TUNING.bustSeconds) {
-            bustMeter = 0;
-            G.onBusted();
-          }
-        } else {
-          bustMeter = Math.max(0, bustMeter - dt * 1.4);
+      const dx = pPos.x - car.pos.x;
+      const dz = pPos.z - car.pos.z;
+      const dist = Math.hypot(dx, dz);
+      const targetAngle = Math.atan2(dx, dz);
+      let diff = targetAngle - car.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      let throttle = 1;
+      let steer = Math.max(-1, Math.min(1, diff * 1.9));
+      if (Math.abs(diff) > 2.5 && car.speed > 6) throttle = -0.7; // overshot: brake and swing round
+      if (dist < 7) throttle = 0.25;
+      if (car.reverseTimer > 0) {
+        car.reverseTimer -= dt;
+        throttle = -1;
+        steer = -steer;
+      } else if (Math.abs(car.speed) < 0.6 && throttle > 0) {
+        car.stuckTime = (car.stuckTime || 0) + dt;
+        if (car.stuckTime > 1.1) {
+          car.reverseTimer = 0.65;
+          car.stuckTime = 0;
         }
       } else {
-        bustMeter = 0;
+        car.stuckTime = 0;
       }
-    },
-  };
+      car.drive(dt, throttle, steer, false);
+    }
+
+    // Foot cops close in, keep a firing distance, and shoot from 3 stars.
+    for (const cop of this.cops) {
+      if (cop.down) {
+        cop.downTimer -= dt;
+        continue;
+      }
+      const dx = pPos.x - cop.pos.x;
+      const dz = pPos.z - cop.pos.z;
+      const dist = Math.hypot(dx, dz);
+      const targetAngle = Math.atan2(dx, dz);
+      let diff = targetAngle - cop.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      cop.angle += Math.max(-4 * dt, Math.min(4 * dt, diff));
+      if (dist > 9) {
+        const speed = 4.6;
+        cop.pos.x += Math.sin(cop.angle) * speed * dt;
+        cop.pos.z += Math.cos(cop.angle) * speed * dt;
+        resolveCollisions(cop.pos, 0.45, world.colliders);
+        cop.walkPhase += dt * 10;
+      }
+      const swing = Math.sin(cop.walkPhase) * 0.5;
+      cop.legL.rotation.x = swing;
+      cop.legR.rotation.x = -swing;
+      cop.mesh.rotation.y = cop.angle;
+      if (this.stars >= 3 && dist < 30 && !world.noEnemyFire) {
+        world.combat.enemyShoot(cop, { x: pPos.x, z: pPos.z }, world, events, now);
+      }
+    }
+
+    // The bust meter: a unit on top of a player who has stopped moving.
+    let pressure = false;
+    if (!player.dead) {
+      if (player.mode === "foot") {
+        for (const cop of this.cops) {
+          if (!cop.down && Math.hypot(cop.pos.x - pPos.x, cop.pos.z - pPos.z) < 3.4) pressure = true;
+        }
+        for (const car of this.cars) {
+          if (Math.hypot(car.pos.x - pPos.x, car.pos.z - pPos.z) < 4.6) pressure = true;
+        }
+        if (pressure) this.bustMeter += dt / 1.7;
+      } else if (player.car) {
+        for (const car of this.cars) {
+          if (Math.hypot(car.pos.x - pPos.x, car.pos.z - pPos.z) < 5.2 && Math.abs(player.car.speed) < 1.6) pressure = true;
+        }
+        if (pressure) this.bustMeter += dt / 2.3;
+      }
+    }
+    if (!pressure) this.bustMeter = Math.max(0, this.bustMeter - dt * 0.7);
+    if (this.bustMeter >= 1 && !world.noBust) {
+      this.bustMeter = 0;
+      events.push({ type: "busted" });
+    }
+  }
 }

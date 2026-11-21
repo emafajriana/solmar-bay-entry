@@ -4,63 +4,112 @@
 
 # SOLMAR BAY
 
-An original sun-soaked coastal crime city, built with Three.js. Run jobs for
-fixer Carmen Duarte, steal anything with wheels, and stay ahead of Solmar PD
-across six districts — Downtown, Old Town, The Hills, Marina, Beachfront and
-Industrial — with a beach, a working harbor, traffic that stops at lights,
-and a story that ends with a king.
+An original open-world crime game that runs entirely in the browser. One
+sun-drenched coastal city, six districts, a fixer with a grudge, a rival gang
+that wants the docks, and a police force that remembers *where* you made your
+mess. Everything here — city, characters, story, art, sound — is original and
+built from scratch on Three.js. No downloads, no server, no network calls:
+open the page and play.
 
-**Signature feature — DISTRICT HEAT.** Every district keeps its own heat
-meter. A crime raises the heat of the district it happens in, and only that
-district; your wanted stars are read off the heat where you stand. So the
-map itself is the wanted system: flee across a district line and the
-pressure drops, while the district you left stays hot, patrols harder and
-charges more at the Pay'n'Spray. The minimap tints each district by its
-heat, live.
+## The signature feature: District Heat
+
+Most wanted systems keep one global star rating. Solmar Bay doesn't. **Every
+district keeps its own heat.** Commit a crime in the Marina and the Marina
+heats up — patrols multiply there, the minimap flushes red there, and the
+stars over your head are read from the heat of the ground you are standing
+on. Duck two districts over into a quiet part of town and the hunt cools
+while the Marina is still boiling. Each district also cools at its own rate:
+Downtown's cameras hold a grudge, the Hills forget by sundown. Managing the
+map's heat — not just your stars — is the game.
+
+## What's in the city
+
+- **A full procedural city** — an 8×8 block grid with roads, sidewalks,
+  traffic lights, palms, billboards, a beach and open ocean to the south,
+  and a working container harbor.
+- **Six districts** — Downtown, Marina, Old Town, Industrial, Beachfront and
+  the Hills — each with its own look, building style and District Heat.
+- **On foot and behind the wheel** — third-person walking, running, jumping,
+  fists and firearms; steal any car you can reach, drive it, wreck it, get it
+  resprayed.
+- **Living traffic and crowds** — AI cars that obey traffic lights,
+  pedestrians who stroll the sidewalks and scatter when things go loud.
+- **Police that hunt by district** — patrol cars, foot cops, roadblocks at
+  high heat, bust and wasted states, and a Pay'n'Spray that launders your
+  heat for cash.
+- **An 8-mission story** — fixer Carmen "La Jefa" Duarte hires you to take
+  the bay back from Los Tiburones, from a first drive across town to the
+  assault on their headquarters.
+- **An economy** — mission pay, cash drops, a gun shop, a diner, a hospital,
+  and resprays that all cost money you have to earn.
+- **Synthesised audio** — engine hum, sirens, gunfire, jingles and an ambient
+  synthwave loop, all generated with WebAudio. No audio files.
+- **A save that sticks** — cash, story progress and lifetime stats persist in
+  the browser, with Continue on the title screen.
+
+## How to play
+
+Serve the `game/` folder with any static file server (or run
+`node serve.ts` from this repo) and open it in a desktop browser.
+
+| Input | Action |
+| --- | --- |
+| W A S D | Move / drive |
+| Mouse | Look (click the game to lock the pointer) |
+| Shift | Run / boost |
+| Space | Jump / handbrake |
+| E | Enter or exit a car, talk, use a shop |
+| F | Punch |
+| Mouse click | Shoot (when armed) |
+| 1 / 2 / 3 | Fists / pistol / shotgun or rifle |
+| R | Reload |
+| P or Esc | Pause |
 
 ## District Heat, in detail
 
-Most open-world games keep one global wanted level. Solmar Bay keeps six.
+- **Heat is a place, not a person.** Each district holds 0–100 heat. Steal
+  a car in the Marina and the Marina gains heat; Downtown neither knows
+  nor cares.
+- **Stars are local.** Your wanted stars are read from the heat of the
+  district you are currently in: under 8 heat is a clean record, 84+ is a
+  five-star manhunt. Cross a district line into somewhere cool and the
+  stars fall off you — the hot district keeps its patrols and its colour
+  on the minimap.
+- **The PD radios ahead.** While a chase is live, the district you flee
+  into warms slowly, so running in circles around one block does not work.
+- **Districts cool at their own rates.** Heat fades once a district has
+  been quiet for a while — fastest in the Hills (2.2/s), slowest Downtown
+  (0.6/s), where the cameras remember. Cooling pauses while the police
+  have eyes on you, and hiding at a mission drop-off bleeds heat faster.
+- **Escalation follows the stars.** Two stars brings foot cops, three
+  brings gunfire, four brings roadblocks, five brings everything.
+- **The wash.** Shine Auto's Pay'n'Spray ($300) zeroes the heat of the
+  district you are in and halves every other district — the legal way to
+  cool a map that has gone red.
 
-- Every crime — a stolen car, a shot fired, a hostile down — adds heat to
-  the district it happens in, and only there. The six meters live
-  independently.
-- Your stars are computed where you stand: that district's heat, plus a
-  quarter of the worst heat anywhere else. Five thresholds, five stars.
-- Patrol density scales with the local meter, so a hot district genuinely
-  feels hunted — more cruisers, foot police from two stars, roadblocks
-  from four.
-- Heat cools slowly while nobody sees you in that district. A respray at
-  the Pay'n'Spray zeroes the district you are in and halves the rest —
-  and a hot district charges you more for the privilege.
-- The minimap tints each district by its heat, so the map itself is your
-  wanted meter: plan your escape across a border, not just away from the
-  nearest cruiser.
+Crimes and their heat: stealing a car 16 · hitting a pedestrian 22 ·
+killing 40 · killing an officer 55 · shots heard by police 8 · punching
+someone 6 · a hard crash 4.
 
-## Play it
+## The story
 
-Serve `game/` with any static server and open it in desktop Chrome:
+Eight missions for Carmen "La Jefa" Duarte of La Perla bar, Marina:
 
-```
-node serve.ts        # then open http://localhost:8080
-```
+1. **Welcome to Solmar** ($200) — cross the Marina and meet the fixer.
+2. **Pizza Run** ($350) — a judge's pizza, delivered hot, Downtown.
+3. **Getaway Driver** ($600) — a crew, a score, a two-star escape.
+4. **Turf War** ($900) — five Tiburones in Beachfront who need evicting.
+5. **The Drop** ($1,200) — a package to the harbor, fast and quiet.
+6. **Repo Job** ($1,800) — repossess a sports car from the Hills, intact.
+7. **Harbor Heist** ($3,000) — clear the pier, then outrun the Industrial grid.
+8. **King of the Bay** ($5,000) — storm Club Tiburón and end the war.
 
-No build step, no network requests, no accounts. Progress saves to
-localStorage.
+## The hand-in
 
-## The game
+`main.ts` is the entry program: it copies `game/` and `screenshots/` into
+the output directory and writes `dossier.json` with the vendored make.fun
+library, byte for byte the way the scorer builds it.
 
-- **On foot** — WASD + mouse look, Shift run, Space jump, E interact, F punch, click to shoot, 1–4 weapons.
-- **Driving** — steal parked or occupied cars, arcade handling, handbrake, damage and smoke, drive-in Pay'n'Spray repairs.
-- **The law** — District Heat wanted system, pursuit cars that ram, foot police from two stars, roadblocks at four, a busted meter if they corner you standing still.
-- **Eight story jobs** — from a first drive across the bay to the Harbor Heist and the fall of El Tiburón, with timers, escorts, repo work and turf wars.
-- **Economy** — mission payouts and cash drops; spend at the Gun Runner, the diner (heals) and the Pay'n'Spray.
-- **City life** — signalled traffic, fleeing pedestrians, a working minimap, an in-game clock and radio, and a fully synthesised WebAudio soundtrack: engines, sirens, gunfire and a synthwave pad. No audio files.
-
-## Entry layout
-
-- `main.ts` — the hand-in: copies `game/` and `screenshots/` to the output and writes `dossier.json` with the vendored make.fun library.
-- `serve.ts` — a tiny local server for `game/`.
-- `game/src/` — one file per job: `city` builds the world, `vehicles` drives it, `police` runs District Heat and the pursuit, `missions` carries Carmen's eight jobs, `hud` draws the interface and minimap, `shots` stages the screenshots, and their companions handle input, combat, crowds, saving and sound.
-
-An entry for the make.fun [gta6-01](https://make.fun/bounty/gta6-01) competition ("Make GTA 6"). All names, characters, story and art are original.
+An entry for the make.fun [gta6-01](https://make.fun/bounty/gta6-01)
+competition ("Make GTA 6"). All names, characters, story and art are
+original.

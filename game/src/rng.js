@@ -1,38 +1,41 @@
-// rng.js — a small seeded random number generator (mulberry32) plus the
-// helpers the world builders reach for. Everything procedural in SOLMAR BAY
-// draws from one of these, never from Math.random, so a given seed always
-// builds the same city and the screenshot scenes render identically.
+// SOLMAR BAY — a small seeded random number generator.
+//
+// The city, the traffic and the staged screenshot scenes are all built from
+// one seed so a given seed always produces the same bay. mulberry32 is the
+// core: tiny, fast and good enough for placing buildings and picking cars.
 
-export function makeRng(seed) {
-  let state = (seed >>> 0) || 0x9e3779b9;
-  function next() {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
+export class Rng {
+  constructor(seed) {
+    this.state = seed >>> 0 || 1;
+  }
+
+  next() {
+    this.state = (this.state + 0x6d2b79f5) >>> 0;
+    let t = this.state;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
-  return {
-    next,
-    range(min, max) {
-      return min + next() * (max - min);
-    },
-    int(min, max) {
-      return Math.floor(min + next() * (max - min + 1));
-    },
-    pick(list) {
-      return list[Math.floor(next() * list.length)];
-    },
-    chance(p) {
-      return next() < p;
-    },
-    sign() {
-      return next() < 0.5 ? -1 : 1;
-    },
-    // A fresh generator on an independent stream, for subsystems that must
-    // not disturb the caller's sequence.
-    fork(salt) {
-      return makeRng((seed ^ Math.imul(salt + 1, 0x85ebca6b)) >>> 0);
-    },
-  };
+
+  range(a, b) {
+    return a + (b - a) * this.next();
+  }
+
+  int(a, b) {
+    return Math.floor(this.range(a, b + 1));
+  }
+
+  pick(list) {
+    return list[Math.floor(this.next() * list.length) % list.length];
+  }
+
+  chance(p) {
+    return this.next() < p;
+  }
+
+  // A fresh independent stream derived from this one, so subsystems can
+  // draw numbers without disturbing each other's sequences.
+  fork(salt) {
+    return new Rng((this.state ^ Math.imul(salt + 1, 0x9e3779b9)) >>> 0);
+  }
 }

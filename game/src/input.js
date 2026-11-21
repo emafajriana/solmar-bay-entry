@@ -1,135 +1,103 @@
-// input.js — keyboard and mouse state for the simulation.
+// SOLMAR BAY — keyboard and mouse state.
 //
-// Two kinds of key state are kept apart on purpose:
-//   - `down`    — keys physically held right now (movement, throttle).
-//   - `tapped`  — one-shot actions (enter car, punch, pause). A tap is
-//                 queued on keydown and stays queued until a simulation
-//                 step consumes it with take(), so a short press can never
-//                 fall between two rendered frames and get lost.
-// Mouse movement accumulates into mouseDX/mouseDY, drained by the camera
-// once per step. Pointer lock is only requested while playing.
+// Two kinds of input live here:
+//   * held state (keys down, mouse button down) that the simulation reads
+//     every step, and
+//   * one-shot presses, which are queued on the physical keydown and stay
+//     queued until a simulation step consumes them — a press is never lost
+//     just because a frame happened to run no step.
+//
+// Mouse look works through pointer lock; when the pointer is not locked
+// (menus, headless tests) the accumulated deltas simply stay at zero.
 
-export function createInput(canvas) {
-  const down = new Set();
-  const tapped = new Set();
-  let mouseDX = 0;
-  let mouseDY = 0;
-  let mouseDown = false;
-  let lockWanted = false;
+class Input {
+  constructor() {
+    this.keys = new Set();
+    this.presses = new Set();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseDown = false;
+    this.clicked = false;
+    this.locked = false;
+    this.target = null;
+  }
 
-  window.addEventListener('keydown', (event) => {
-    if (event.repeat) return;
-    down.add(event.code);
-    tapped.add(event.code);
-    if (['Space', 'ArrowUp', 'ArrowDown'].includes(event.code)) event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    down.delete(event.code);
-  });
-  window.addEventListener('blur', () => {
-    down.clear();
-    mouseDown = false;
-  });
+  attach(target) {
+    this.target = target;
+    window.addEventListener("keydown", (e) => {
+      if (["ArrowUp", "ArrowDown", "Space"].includes(e.code)) e.preventDefault();
+      if (!e.repeat) this.presses.add(e.code);
+      this.keys.add(e.code);
+    });
+    window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+    window.addEventListener("blur", () => {
+      this.keys.clear();
+      this.mouseDown = false;
+    });
+    target.addEventListener("mousedown", (e) => {
+      if (e.button === 0) {
+        this.mouseDown = true;
+        this.clicked = true;
+      }
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (e.button === 0) this.mouseDown = false;
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (this.locked) {
+        this.mouseDX += e.movementX || 0;
+        this.mouseDY += e.movementY || 0;
+      }
+    });
+    document.addEventListener("pointerlockchange", () => {
+      this.locked = document.pointerLockElement === target;
+    });
+  }
 
-  canvas.addEventListener('mousedown', (event) => {
-    if (event.button === 0) mouseDown = true;
-    if (lockWanted && document.pointerLockElement !== canvas) {
-      canvas.requestPointerLock();
-    }
-  });
-  window.addEventListener('mouseup', (event) => {
-    if (event.button === 0) mouseDown = false;
-  });
-  window.addEventListener('mousemove', (event) => {
-    if (document.pointerLockElement === canvas) {
-      mouseDX += event.movementX || 0;
-      mouseDY += event.movementY || 0;
-    }
-  });
+  lockPointer() {
+    if (!this.target || this.locked) return;
+    const attempt = (options) => {
+      try {
+        const p = options ? this.target.requestPointerLock(options) : this.target.requestPointerLock();
+        return p && typeof p.catch === "function" ? p : null;
+      } catch {
+        return null;
+      }
+    };
+    // Prefer raw movement; if the browser refuses (no user gesture,
+    // unsupported option), fall back once and then let it go — a later
+    // click on the canvas will lock again.
+    const first = attempt({ unadjustedMovement: true });
+    if (first) first.catch(() => { const second = attempt(); if (second) second.catch(() => {}); });
+  }
 
-  return {
-    isDown(code) {
-      return down.has(code);
-    },
-    // Consume a one-shot action: true exactly once per physical press.
-    take(code) {
-      if (!tapped.has(code)) return false;
-      tapped.delete(code);
+  down(code) {
+    return this.keys.has(code);
+  }
+
+  // True exactly once per physical press, whenever the next step asks.
+  pressed(code) {
+    if (this.presses.has(code)) {
+      this.presses.delete(code);
       return true;
-    },
-    peek(code) {
-      return tapped.has(code);
-    },
-    clearTaps() {
-      tapped.clear();
-    },
-    firing() {
-      return mouseDown;
-    },
-    drainMouse() {
-      const out = { dx: mouseDX, dy: mouseDY };
-      mouseDX = 0;
-      mouseDY = 0;
-      return out;
-    },
-    setLockWanted(wanted) {
-      lockWanted = wanted;
-      if (!wanted && document.pointerLockElement === canvas) document.exitPointerLock();
-    },
-    locked() {
-      return document.pointerLockElement === canvas;
-    },
-    // Movement axes from the held keys, each in -1..1.
-    moveAxes() {
-      const z = (down.has('KeyW') || down.has('ArrowUp') ? 1 : 0) - (down.has('KeyS') || down.has('ArrowDown') ? 1 : 0);
-      const x = (down.has('KeyD') || down.has('ArrowRight') ? 1 : 0) - (down.has('KeyA') || down.has('ArrowLeft') ? 1 : 0);
-      return { x, z };
-    },
-    steerAxis() {
-      return (down.has('KeyA') || down.has('ArrowLeft') ? 1 : 0) - (down.has('KeyD') || down.has('ArrowRight') ? 1 : 0);
-    },
-  };
+    }
+    return false;
+  }
+
+  // Read and clear the mouse motion gathered since the last read.
+  takeMouse() {
+    const dx = this.mouseDX;
+    const dy = this.mouseDY;
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    return { dx, dy };
+  }
+
+  takeClick() {
+    const c = this.clicked;
+    this.clicked = false;
+    return c;
+  }
 }
 
-// A stand-in with the same shape, driven by the screenshot autopilot:
-// main.js swaps this in for the real thing when a ?shot= scene runs.
-export function createScriptedInput() {
-  const held = new Set();
-  const taps = new Set();
-  return {
-    isDown: (code) => held.has(code),
-    take(code) {
-      if (!taps.has(code)) return false;
-      taps.delete(code);
-      return true;
-    },
-    peek: (code) => taps.has(code),
-    clearTaps: () => taps.clear(),
-    firing: () => held.has('__fire'),
-    drainMouse: () => ({ dx: 0, dy: 0 }),
-    setLockWanted: () => {},
-    locked: () => false,
-    moveAxes() {
-      return {
-        x: (held.has('KeyD') ? 1 : 0) - (held.has('KeyA') ? 1 : 0),
-        z: (held.has('KeyW') ? 1 : 0) - (held.has('KeyS') ? 1 : 0),
-      };
-    },
-    steerAxis() {
-      return (held.has('KeyA') ? 1 : 0) - (held.has('KeyD') ? 1 : 0);
-    },
-    // Autopilot controls:
-    hold(code) {
-      held.add(code);
-    },
-    release(code) {
-      held.delete(code);
-    },
-    releaseAll() {
-      held.clear();
-    },
-    tap(code) {
-      taps.add(code);
-    },
-  };
-}
+export const input = new Input();

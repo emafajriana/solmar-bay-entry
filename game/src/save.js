@@ -1,34 +1,50 @@
-// save.js — the localStorage save: cash, story progress and lifetime
-// stats, so CONTINUE on the title screen picks the bay up where the
-// player left it. Every access is wrapped: a browser that refuses
-// storage (or a headless run) simply plays without saving.
+// SOLMAR BAY — the persistent save, kept in localStorage.
+//
+// One small record: the player's cash, how far the story has advanced,
+// which weapons are owned, and a handful of lifetime stats for the victory
+// screen. Anything unreadable falls back to a fresh save.
 
-const KEY = 'solmar-bay-save-v1';
+const KEY = "solmar-bay-save-v1";
+
+export function freshSave() {
+  return {
+    cash: 250,
+    missionIndex: 0, // next story mission to offer
+    weapons: { pistol: false, shotgun: false, rifle: false },
+    stats: { steals: 0, knockouts: 0, missionsDone: 0, topStars: 0, playSeconds: 0 },
+    finished: false,
+  };
+}
 
 export function loadSave() {
   try {
-    const raw = window.localStorage.getItem(KEY);
-    if (!raw) return null;
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return freshSave();
     const data = JSON.parse(raw);
-    if (typeof data !== 'object' || data === null) return null;
-    return data;
+    const base = freshSave();
+    return {
+      ...base,
+      ...data,
+      weapons: { ...base.weapons, ...(data.weapons || {}) },
+      stats: { ...base.stats, ...(data.stats || {}) },
+    };
   } catch {
-    return null;
+    return freshSave();
   }
 }
 
-export function storeSave(data) {
+export function storeSave(save) {
   try {
-    window.localStorage.setItem(KEY, JSON.stringify(data));
+    localStorage.setItem(KEY, JSON.stringify(save));
   } catch {
-    // Storage unavailable: the run simply is not saved.
+    // A full or blocked store should never break the game.
   }
 }
 
-export function clearSave() {
+export function wipeSave() {
   try {
-    window.localStorage.removeItem(KEY);
+    localStorage.removeItem(KEY);
   } catch {
-    // Nothing to clear.
+    // Nothing to wipe.
   }
 }

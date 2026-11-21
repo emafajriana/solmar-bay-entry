@@ -1,112 +1,156 @@
-/* SOLMAR BAY — page, HUD and screen styling. Sunset-gold on deep bay
-   blue, chunky readable type, everything glassy and bottom-anchored the
-   way an open-world HUD should be. */
+/* SOLMAR BAY — page and HUD styling. Tropical noir: deep sea blues, sand,
+   and a heat-red that only shows up when a district is in trouble. */
 
-* { box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
 html, body {
-  margin: 0;
+  width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #0d1b26;
-  font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  color: #f4f1de;
+  background: #0d2231;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  color: #f4f1e8;
+  user-select: none;
 }
+
 #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-#status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+#damage {
+  position: fixed; inset: 0; pointer-events: none; opacity: 0;
+  box-shadow: inset 0 0 140px 40px rgba(200, 20, 20, 0.55);
+  transition: opacity 0.12s;
+  z-index: 5;
+}
 
 /* ---------- HUD ---------- */
-#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-#topleft { position: absolute; top: 14px; left: 14px; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 4; opacity: 0; transition: opacity 0.3s; }
+#hud.visible { opacity: 1; }
+
+#topleft { position: absolute; top: 18px; left: 18px; width: 250px; }
+#healthbar { height: 14px; background: rgba(10, 20, 28, 0.66); border: 1px solid rgba(255,255,255,0.35); border-radius: 3px; overflow: hidden; }
+#healthfill { height: 100%; width: 100%; background: #7dd069; transition: width 0.15s; }
+#district-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 7px; text-shadow: 0 1px 3px rgba(0,0,0,0.7); }
+#district-name { font-weight: 700; font-size: 17px; letter-spacing: 0.04em; }
+#heatlabel { font-size: 9px; letter-spacing: 0.18em; opacity: 0.85; }
+#heatbar { height: 7px; background: rgba(10, 20, 28, 0.66); border: 1px solid rgba(255,255,255,0.25); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+#heatfill { height: 100%; width: 0%; background: linear-gradient(90deg, #ffb703, #fb8500, #e63946); transition: width 0.3s; }
+
+#bustwrap {
+  display: none; margin-top: 8px; height: 16px; position: relative;
+  background: rgba(10, 20, 28, 0.66); border: 1px solid #7ec3ff; border-radius: 3px; overflow: hidden;
+}
+#bustwrap.visible { display: block; }
+#bustfill { height: 100%; width: 0%; background: #3d7bff; }
+#bustwrap span { position: absolute; inset: 0; text-align: center; font-size: 10px; letter-spacing: 0.3em; line-height: 16px; }
+
+#topright { position: absolute; top: 14px; right: 18px; text-align: right; text-shadow: 0 1px 3px rgba(0,0,0,0.75); }
+#stars { font-size: 24px; color: #ffd21f; letter-spacing: 0.12em; min-height: 30px; }
+#cash { font-size: 24px; font-weight: 800; color: #8be26a; }
+#clock { font-size: 14px; opacity: 0.9; }
+#radio { font-size: 12px; color: #ffd9a0; min-height: 15px; }
+
+#objective {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  background: rgba(10, 24, 34, 0.72); border: 1px solid rgba(255, 210, 31, 0.5);
+  border-radius: 6px; padding: 7px 16px; text-align: center; opacity: 0; transition: opacity 0.25s;
+  max-width: 46vw;
+}
+#objective.visible { opacity: 1; }
+#objective-label { display: block; font-size: 9px; letter-spacing: 0.28em; color: #ffd21f; }
+#objective-text { font-size: 15px; font-weight: 600; }
+#objective-dist { color: #ffd21f; font-weight: 700; margin-left: 8px; }
+
+#bottomleft { position: absolute; left: 18px; bottom: 16px; text-shadow: 0 1px 3px rgba(0,0,0,0.8); }
+#speedo { font-size: 26px; font-weight: 800; min-height: 30px; }
+#weapon { font-size: 15px; color: #ffe9a3; min-height: 19px; }
+
 #minimap {
-  width: 196px; height: 196px; border-radius: 10px;
-  border: 2px solid rgba(244, 209, 94, 0.75);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
-  background: #20313d;
+  position: absolute; right: 18px; bottom: 16px; width: 224px; height: 224px;
+  border: 2px solid rgba(255,255,255,0.4); border-radius: 8px; background: #274b63;
 }
-#clockline { margin-top: 5px; font-weight: 700; font-size: 14px; text-shadow: 0 1px 3px #000; }
-#radio { color: #ffd166; font-weight: 600; }
 
-#topright { position: absolute; top: 14px; right: 16px; text-align: right; }
-#stars { font-size: 30px; letter-spacing: 3px; color: #ffd60a; text-shadow: 0 2px 6px rgba(0,0,0,0.7); line-height: 1; }
-#district-name { margin-top: 4px; font-size: 17px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 1px 3px #000; }
-#heatbar { margin-top: 4px; margin-left: auto; width: 170px; height: 9px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.35); border-radius: 5px; overflow: hidden; }
-#heatfill { height: 100%; width: 0%; background: linear-gradient(90deg, #52b788, #ffd60a, #e63946); transition: width 0.3s; }
-#heatlabel { font-size: 10px; letter-spacing: 2px; opacity: 0.85; }
-
-#topcenter { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 44vw; }
-#objective { font-size: 19px; font-weight: 700; text-shadow: 0 2px 5px #000; }
-#objdist { font-size: 15px; color: #ffd166; font-weight: 700; text-shadow: 0 1px 3px #000; }
-
-#bottomleft { position: absolute; left: 16px; bottom: 16px; }
-#healthbar { width: 230px; height: 15px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.4); border-radius: 7px; overflow: hidden; }
-#healthfill { height: 100%; width: 100%; background: #52b788; transition: width 0.25s; }
-#cash { margin-top: 5px; font-size: 24px; font-weight: 800; color: #95d5b2; text-shadow: 0 2px 4px #000; }
-
-#bottomright { position: absolute; right: 16px; bottom: 16px; text-align: right; }
-#speed { font-size: 26px; font-weight: 800; text-shadow: 0 2px 4px #000; }
-#weapon { margin-top: 4px; font-size: 16px; font-weight: 700; letter-spacing: 1px; text-shadow: 0 1px 3px #000; }
-
-#bustwrap { position: absolute; left: 50%; bottom: 15vh; transform: translateX(-50%); width: 260px; text-align: center; }
-#bustlabel { font-weight: 900; letter-spacing: 3px; color: #ff5964; text-shadow: 0 2px 5px #000; }
-#bustbar { height: 10px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.4); border-radius: 5px; overflow: hidden; }
-#bustfill { height: 100%; width: 0%; background: #e63946; }
-
-#interact {
-  position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%);
-  background: rgba(10, 20, 30, 0.82); border: 1px solid rgba(255, 209, 102, 0.8);
-  padding: 8px 18px; border-radius: 20px; font-weight: 700; font-size: 16px;
+#crosshair {
+  position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px;
+  border: 1.5px solid rgba(255,255,255,0.9); border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0,0,0,0.8);
 }
+
+#prompt {
+  position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%);
+  background: rgba(10, 24, 34, 0.8); border-radius: 5px; padding: 6px 14px;
+  font-size: 14.5px; opacity: 0; transition: opacity 0.2s; white-space: nowrap;
+}
+#prompt.visible { opacity: 1; }
 
 #toast {
-  position: fixed; left: 50%; bottom: 22vh; transform: translateX(-50%);
-  max-width: 70vw; text-align: center; font-size: 18px; font-weight: 600;
-  text-shadow: 0 2px 5px #000; opacity: 0; transition: opacity 0.35s; z-index: 6; pointer-events: none;
+  position: absolute; left: 50%; bottom: 170px; transform: translateX(-50%);
+  background: rgba(20, 34, 20, 0.85); border: 1px solid rgba(139, 226, 106, 0.5);
+  border-radius: 5px; padding: 7px 16px; font-size: 15px; opacity: 0; transition: opacity 0.25s;
+  white-space: nowrap;
 }
-#banner {
-  position: fixed; left: 50%; top: 26vh; transform: translateX(-50%);
-  text-align: center; opacity: 0; transition: opacity 0.35s; z-index: 6; pointer-events: none;
+#toast.visible { opacity: 1; }
+
+#flash {
+  position: absolute; left: 0; right: 0; top: 34%; text-align: center;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none;
 }
-#banner-title { font-size: 44px; font-weight: 900; letter-spacing: 3px; color: #ffd60a; text-shadow: 0 3px 10px rgba(0,0,0,0.8); }
-#banner-sub { font-size: 19px; font-weight: 600; text-shadow: 0 2px 5px #000; }
+#flash.visible { opacity: 1; }
+#flash-text {
+  font-size: 44px; font-weight: 900; letter-spacing: 0.08em; color: #ffd21f;
+  text-shadow: 0 3px 14px rgba(0,0,0,0.75);
+}
+#flash-sub { font-size: 17px; text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
 
 /* ---------- Screens ---------- */
+
 .screen {
-  position: fixed; inset: 0; z-index: 10;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(6, 14, 22, 0.55);
+  position: fixed; inset: 0; z-index: 10; display: none;
+  align-items: center; justify-content: center;
+  background: linear-gradient(180deg, rgba(8, 26, 40, 0.45), rgba(8, 26, 40, 0.78));
 }
-.card {
-  max-width: 620px; width: calc(100vw - 48px);
-  background: linear-gradient(160deg, rgba(13, 33, 48, 0.96), rgba(23, 42, 58, 0.94));
-  border: 1px solid rgba(255, 209, 102, 0.55); border-radius: 14px;
-  padding: 30px 36px; text-align: center;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+.screen.visible { display: flex; }
+
+.panel {
+  background: rgba(10, 28, 42, 0.92);
+  border: 1px solid rgba(255, 183, 3, 0.35);
+  border-radius: 12px;
+  padding: 34px 44px;
+  max-width: 640px;
+  width: calc(100vw - 60px);
+  text-align: center;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
 }
-.title-card h1 {
-  margin: 0 0 6px; font-size: 64px; font-weight: 900; letter-spacing: 2px; line-height: 0.95;
-  color: #f4f1de;
+
+.kicker { font-size: 11px; letter-spacing: 0.32em; color: #ffb703; margin-bottom: 10px; }
+
+.title-panel h1 {
+  font-size: 74px; font-weight: 900; letter-spacing: 0.02em; line-height: 0.95;
+  color: #fff7e0;
 }
-.title-card h1 span { color: #ffd60a; }
-.card h2 { margin: 0 0 12px; font-size: 32px; letter-spacing: 2px; color: #ffd60a; }
-.tagline { font-size: 17px; line-height: 1.45; }
-.signature {
-  font-size: 15px; line-height: 1.5; text-align: left;
-  background: rgba(255, 214, 10, 0.1); border-left: 4px solid #ffd60a;
-  padding: 10px 14px; border-radius: 0 8px 8px 0;
+.title-panel h1 span {
+  background: linear-gradient(92deg, #ffb703, #fb8500, #e63946);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.controls { text-align: left; font-size: 15.5px; line-height: 1.35; }
-.controls b, .card p b { color: #ffd166; }
-.reward { font-size: 19px; font-weight: 800; color: #95d5b2; }
-.fineprint { font-size: 12.5px; opacity: 0.75; margin-bottom: 0; }
-.buttons { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; align-items: center; }
+.tagline { margin: 16px 0 24px; font-size: 16.5px; line-height: 1.5; color: #dcebf2; }
+.fineprint { margin-top: 18px; font-size: 12px; opacity: 0.65; }
+
+.panel h2 { font-size: 32px; margin-bottom: 12px; color: #fff7e0; }
+.panel p { line-height: 1.55; color: #dcebf2; }
+.reward { color: #8be26a; font-weight: 700; margin-top: 10px; }
+
+.buttons { display: flex; gap: 12px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
 button {
   pointer-events: auto; cursor: pointer;
-  min-width: 280px; padding: 12px 22px;
-  font-size: 17px; font-weight: 800; letter-spacing: 1px;
-  color: #12212e; background: linear-gradient(180deg, #ffd60a, #f4a261);
-  border: none; border-radius: 9px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  font: inherit; font-weight: 800; letter-spacing: 0.08em;
+  color: #10222f; background: #e8e2d2; border: none; border-radius: 7px;
+  padding: 12px 26px; font-size: 15px;
+  transition: transform 0.08s, background 0.15s;
 }
-button:hover:not(:disabled) { filter: brightness(1.08); }
-button:disabled { opacity: 0.45; cursor: default; }
-.shop-item { background: linear-gradient(180deg, #a8dadc, #457b9d); color: #0d1b26; }
+button:hover { background: #ffffff; transform: translateY(-1px); }
+button.primary { background: linear-gradient(180deg, #ffc53d, #fb8500); color: #26160a; }
+button.primary:hover { background: linear-gradient(180deg, #ffd166, #ff9a1f); }
+
+table.controls { margin: 8px auto 14px; border-collapse: collapse; text-align: left; font-size: 14.5px; }
+table.controls td { padding: 4px 10px; color: #dcebf2; }
+table.controls td:nth-child(odd) { font-weight: 800; color: #ffd166; white-space: nowrap; }

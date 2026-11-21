@@ -1,51 +1,36 @@
-// SOLMAR BAY — hand-in program for the make.fun gta6-01 competition.
+// SOLMAR BAY — the hand-in program for this make.fun gta6-01 entry.
 //
-// What this file does, and all it does:
-//   1. copies the static game (game/) and the screenshot set (screenshots/)
-//      from beside this file into the output directory, and
-//   2. writes dossier.json there with the vendored make.fun library — the
-//      summary of the entry that the judge reads.
+// What it does, in order:
+//   1. copies the playable game (game/) and its four renders (screenshots/)
+//      from this repository into the output directory;
+//   2. asks the vendored make.fun library to build the dossier of that
+//      output directory, with exactly the caps the bounty's scorer uses;
+//   3. writes the result to dossier.json in the output directory.
 //
-// The game itself is plain static files: game/index.html plus its ES modules,
-// served offline by any static file server. There is no build step and no
-// network access at run time.
-//
-// Run it the way the grader does (from any working directory):
-//   node main.ts
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
-// Play the game locally with:  node serve.ts   (then open the printed URL)
+// The output directory comes from MAKEFUN_OUTPUT_DIR when the grader sets
+// it, and defaults to /output. The program only ever reads paths relative
+// to its own file, so it can be run from any working directory and will
+// produce the same bytes every time.
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildDossier } from "./vendor/makefun-game.ts";
 
-const entryDir = fileURLToPath(new URL('.', import.meta.url));
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const repoDir = dirname(fileURLToPath(import.meta.url));
+const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 
-const DOSSIER_LIMITS = {
+mkdirSync(outputDir, { recursive: true });
+for (const part of ["game", "screenshots"]) {
+  cpSync(join(repoDir, part), join(outputDir, part), { recursive: true });
+}
+
+const dossier = buildDossier(outputDir, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
-  game_path_max_bytes: 1000,
-};
+});
 
-mkdirSync(outputDir, { recursive: true });
-
-cpSync(join(entryDir, 'game'), join(outputDir, 'game'), { recursive: true });
-
-const shotsOut = join(outputDir, 'screenshots');
-mkdirSync(shotsOut, { recursive: true });
-const shotsIn = join(entryDir, 'screenshots');
-if (existsSync(shotsIn)) {
-  cpSync(shotsIn, shotsOut, { recursive: true });
-}
-
-// The scorer's caps for this competition are passed to buildDossier so an
-// entry the scorer would refuse is refused here first: at most 4 screenshots
-// of 256 KiB each; game/ at most 993 entries and 48 MiB in all, no path over
-// 1,000 bytes; the dossier's source text capped at 160 KiB.
-const dossier = buildDossier(outputDir, DOSSIER_LIMITS);
-writeFileSync(join(outputDir, 'dossier.json'), dossier);
+writeFileSync(join(outputDir, "dossier.json"), dossier);
+console.log(`solmar-bay: game + screenshots copied, dossier.json written (${dossier.byteLength} bytes)`);

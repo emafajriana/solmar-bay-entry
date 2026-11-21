@@ -1,185 +1,188 @@
-// pedestrians.js — the people of SOLMAR BAY. makeHumanoid builds the
-// low-poly walker every person in the game shares (civilians here, gang
-// members and foot police in combat.js); the crowd itself walks the
-// sidewalk loop of its block, and runs when gunfire or a crash panics it.
+// SOLMAR BAY — pedestrians: people walking the sidewalks, and the gang
+// members the story points at the player.
+//
+// A walker owns a block and strolls its sidewalk ring, corner to corner.
+// Loud trouble nearby — gunfire, a crash, a chase — turns a stroll into a
+// run directly away from the noise. Walkers hit by cars or gunfire go
+// down; the game above decides what that means (a crime, a knockout, a
+// mission objective) through the events this module emits.
 
-import * as THREE from 'three';
-import { TUNING, blockCenters } from './config.js';
-import { collideCircle } from './city.js';
+import * as THREE from "three";
+import { blockMin, BLOCK, GRID, EXTENT } from "./config.js";
+import { resolveCollisions } from "./city.js";
 
-const SKIN = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
-const SHIRTS = [0xe76f51, 0x2a9d8f, 0xe9c46a, 0x457b9d, 0xf4f1de, 0x9b5de5, 0xef476f, 0x118ab2];
-const PANTS = [0x264653, 0x3d405b, 0x606c38, 0x22223b, 0x6d6875];
+const SKIN = [0xf2c79b, 0xd9a066, 0xa9713f, 0x7a4a21, 0xffe0bd];
+const SHIRTS = [0xe4572e, 0x2e86ab, 0xf6f7eb, 0xffc53d, 0x71b340, 0x9b5de5, 0xf15bb5, 0x4ecdc4];
 
-export function makeHumanoid(rng, palette = {}) {
-  const shirt = palette.shirt ?? rng.pick(SHIRTS);
-  const pants = palette.pants ?? rng.pick(PANTS);
-  const skin = palette.skin ?? rng.pick(SKIN);
-  const group = new THREE.Group();
-  const mat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.9 });
+export class Ped {
+  constructor(scene, rng, { x, z, kind = "walker" }) {
+    this.kind = kind; // walker | gang | cop — cops are dressed by police.js
+    this.health = kind === "gang" ? 60 : 30;
+    this.down = false;
+    this.downTimer = 0;
+    this.fleeUntil = 0;
+    this.fleeFrom = null;
+    this.angle = rng.range(0, Math.PI * 2);
+    this.speed = 0;
+    this.stationary = false;
+    this.corner = rng.int(0, 3);
+    this.block = [Math.floor(x / 76) % GRID, Math.floor(z / 76) % GRID];
+    this.reload = 0;
 
-  function limb(w, h, d, color, x, y, z) {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, y, z);
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
-    mesh.position.y = -h / 2;
-    mesh.castShadow = true;
-    pivot.add(mesh);
-    group.add(pivot);
-    return pivot;
+    const g = new THREE.Group();
+    const shirt = kind === "gang" ? 0x8c2b2b : kind === "cop" ? 0x24466e : rng.pick(SHIRTS);
+    const skin = rng.pick(SKIN);
+    const cloth = new THREE.MeshLambertMaterial({ color: shirt });
+    const skinMat = new THREE.MeshLambertMaterial({ color: skin });
+    const legs = new THREE.MeshLambertMaterial({ color: 0x2f3542 });
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.72, 0.3), cloth);
+    torso.position.y = 1.06;
+    torso.castShadow = true;
+    g.add(torso);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 8), skinMat);
+    head.position.y = 1.68;
+    g.add(head);
+    this.legL = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.72, 0.2), legs);
+    this.legL.position.set(-0.14, 0.36, 0);
+    g.add(this.legL);
+    this.legR = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.72, 0.2), legs);
+    this.legR.position.set(0.14, 0.36, 0);
+    g.add(this.legR);
+    const armGeo = new THREE.BoxGeometry(0.13, 0.62, 0.16);
+    this.armL = new THREE.Mesh(armGeo, cloth);
+    this.armL.position.set(-0.34, 1.08, 0);
+    g.add(this.armL);
+    this.armR = new THREE.Mesh(armGeo, cloth);
+    this.armR.position.set(0.34, 1.08, 0);
+    g.add(this.armR);
+    if (kind === "gang" || kind === "cop") {
+      const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.5), new THREE.MeshLambertMaterial({ color: 0x14161a }));
+      gun.position.set(0.34, 0.95, 0.25);
+      g.add(gun);
+    }
+    g.position.set(x, 0, z);
+    scene.add(g);
+    this.mesh = g;
+    this.walkPhase = rng.range(0, 6);
   }
-  const legL = limb(0.17, 0.78, 0.17, pants, -0.13, 0.8, 0);
-  const legR = limb(0.17, 0.78, 0.17, pants, 0.13, 0.8, 0);
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.66, 0.3), mat(shirt));
-  torso.position.y = 1.13;
-  torso.castShadow = true;
-  group.add(torso);
-  if (palette.vest) {
-    const vest = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.4, 0.34), mat(palette.vest));
-    vest.position.y = 1.16;
-    group.add(vest);
+
+  get pos() {
+    return this.mesh.position;
   }
-  const armL = limb(0.13, 0.62, 0.13, shirt, -0.35, 1.42, 0);
-  const armR = limb(0.13, 0.62, 0.13, shirt, 0.35, 1.42, 0);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.32, 0.3), mat(skin));
-  head.position.y = 1.66;
-  head.castShadow = true;
-  group.add(head);
-  if (palette.cap) {
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.34), mat(palette.cap));
-    cap.position.y = 1.86;
-    group.add(cap);
-  }
-  return { group, legL, legR, armL, armR };
-}
 
-export function animateWalk(parts, phase, amount) {
-  const swing = Math.sin(phase) * 0.55 * amount;
-  parts.legL.rotation.x = swing;
-  parts.legR.rotation.x = -swing;
-  parts.armL.rotation.x = -swing * 0.8;
-  parts.armR.rotation.x = swing * 0.8;
-}
-
-export function layDown(parts) {
-  parts.group.rotation.x = -Math.PI / 2;
-  parts.group.position.y = 0.25;
-}
-
-export function createPeds(rng, city) {
-  const list = [];
-  const group = new THREE.Group();
-  const centers = blockCenters();
-  const PATH = 17; // sidewalk loop half-extent inside a block
-
-  function cornerOf(block, index) {
-    const signs = [
-      [-1, -1],
-      [1, -1],
-      [1, 1],
-      [-1, 1],
+  corners() {
+    const [i, j] = this.block;
+    const x0 = blockMin(i) - 3;
+    const z0 = blockMin(j) - 3;
+    const x1 = blockMin(i) + BLOCK + 3;
+    const z1 = blockMin(j) + BLOCK + 3;
+    return [
+      { x: x0, z: z0 },
+      { x: x1, z: z0 },
+      { x: x1, z: z1 },
+      { x: x0, z: z1 },
     ];
-    const [sx, sz] = signs[index % 4];
-    return { x: block.cx + sx * PATH, z: block.cz + sz * PATH };
   }
 
-  function spawnOne() {
-    const cx = rng.pick(centers);
-    const cz = rng.pick(centers);
-    const parts = makeHumanoid(rng);
-    const corner = rng.int(0, 3);
-    const start = cornerOf({ cx, cz }, corner);
-    const ped = {
-      kind: 'civilian',
-      parts,
-      x: start.x,
-      z: start.z,
-      heading: rng.range(0, Math.PI * 2),
-      speed: rng.range(1.1, 1.9),
-      hp: 100,
-      dead: false,
-      block: { cx, cz },
-      corner: (corner + 1) % 4,
-      phase: rng.range(0, 6),
-      state: 'walk',
-      fleeT: 0,
-      fleeFrom: { x: 0, z: 0 },
-    };
-    parts.group.position.set(ped.x, 0, ped.z);
-    group.add(parts.group);
-    list.push(ped);
-    return ped;
-  }
-
-  function update(dt, G) {
-    const panic = G.panic;
-    for (const ped of list) {
-      if (ped.dead) continue;
-      if (ped.state === 'walk' && panic && G.time - panic.t < 1.2) {
-        const d = Math.hypot(ped.x - panic.x, ped.z - panic.z);
-        if (d < 22) {
-          ped.state = 'flee';
-          ped.fleeT = rng.range(2.5, 4.5);
-          ped.fleeFrom = { x: panic.x, z: panic.z };
-        }
-      }
-      let tx;
-      let tz;
-      let speed = ped.speed;
-      if (ped.state === 'flee') {
-        ped.fleeT -= dt;
-        const dx = ped.x - ped.fleeFrom.x;
-        const dz = ped.z - ped.fleeFrom.z;
-        const d = Math.hypot(dx, dz) || 1;
-        tx = ped.x + (dx / d) * 10;
-        tz = ped.z + (dz / d) * 10;
-        speed = 6.4;
-        if (ped.fleeT <= 0) ped.state = 'walk';
-      } else {
-        const target = cornerOf(ped.block, ped.corner);
-        tx = target.x;
-        tz = target.z;
-        if (Math.hypot(tx - ped.x, tz - ped.z) < 0.8) {
-          ped.corner = (ped.corner + 1) % 4;
-          continue;
-        }
-      }
-      const dx = tx - ped.x;
-      const dz = tz - ped.z;
-      const dist = Math.hypot(dx, dz) || 1;
-      const desired = Math.atan2(dx, dz);
-      let turn = desired - ped.heading;
-      while (turn > Math.PI) turn -= Math.PI * 2;
-      while (turn < -Math.PI) turn += Math.PI * 2;
-      ped.heading += Math.max(-6 * dt, Math.min(6 * dt, turn));
-      ped.x += Math.sin(ped.heading) * speed * dt;
-      ped.z += Math.cos(ped.heading) * speed * dt;
-      const [nx, nz] = collideCircle(city, ped.x, ped.z, 0.4);
-      ped.x = nx;
-      ped.z = nz;
-      ped.phase += speed * dt * 2.4;
-      animateWalk(ped.parts, ped.phase, 1);
-      ped.parts.group.position.set(ped.x, 0, ped.z);
-      ped.parts.group.rotation.y = ped.heading;
+  hurt(amount, events, cause) {
+    if (this.down) return;
+    this.health -= amount;
+    if (this.health <= 0) {
+      this.down = true;
+      this.downTimer = 7;
+      this.mesh.rotation.x = -Math.PI / 2;
+      this.mesh.position.y = 0.25;
+      events.push({ type: "pedDown", ped: this, cause, x: this.pos.x, z: this.pos.z });
     }
   }
 
-  return {
-    group,
-    list,
-    spawn(count) {
-      for (let i = 0; i < count; i++) spawnOne();
-    },
-    spawnOne,
-    update,
-    damage(ped, amount) {
-      if (ped.dead) return;
-      ped.hp -= amount;
-      if (ped.hp <= 0) {
-        ped.dead = true;
-        layDown(ped.parts);
+  scare(x, z, now, seconds = 4) {
+    if (this.down) return;
+    const d = Math.hypot(this.pos.x - x, this.pos.z - z);
+    if (d < 34) {
+      this.fleeUntil = now + seconds;
+      this.fleeFrom = { x, z };
+    }
+  }
+
+  update(dt, world) {
+    if (this.down) {
+      this.downTimer -= dt;
+      return this.downTimer > 0;
+    }
+    const now = world.time;
+    let tx;
+    let tz;
+    let speed;
+    if (this.stationary) {
+      speed = 0;
+    } else if (this.fleeUntil > now && this.fleeFrom) {
+      const dx = this.pos.x - this.fleeFrom.x;
+      const dz = this.pos.z - this.fleeFrom.z;
+      const d = Math.hypot(dx, dz) || 1;
+      tx = this.pos.x + (dx / d) * 12;
+      tz = this.pos.z + (dz / d) * 12;
+      speed = 4.4;
+    } else {
+      const cs = this.corners();
+      const target = cs[this.corner];
+      tx = target.x;
+      tz = target.z;
+      speed = 1.45;
+      if (Math.hypot(tx - this.pos.x, tz - this.pos.z) < 1.2) {
+        this.corner = (this.corner + 1) % 4;
       }
-    },
-    radius: TUNING.playerRadius,
-  };
+    }
+    // Sidestep anything with an engine that is bearing down on them.
+    for (const car of world.cars) {
+      if (Math.abs(car.speed) < 6) continue;
+      const dx = this.pos.x - car.pos.x;
+      const dz = this.pos.z - car.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < 42) {
+        const d = Math.sqrt(d2) || 1;
+        tx = this.pos.x + (dx / d) * 8;
+        tz = this.pos.z + (dz / d) * 8;
+        speed = 4.6;
+      }
+    }
+    if (speed > 0) {
+      const dx = tx - this.pos.x;
+      const dz = tz - this.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.05) {
+        const targetAngle = Math.atan2(dx, dz);
+        let diff = targetAngle - this.angle;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        this.angle += Math.max(-3.4 * dt, Math.min(3.4 * dt, diff));
+        this.pos.x += Math.sin(this.angle) * speed * dt;
+        this.pos.z += Math.cos(this.angle) * speed * dt;
+        resolveCollisions(this.pos, 0.45, world.colliders);
+        this.pos.x = Math.max(2, Math.min(EXTENT - 2, this.pos.x));
+        this.pos.z = Math.max(2, Math.min(EXTENT + 60, this.pos.z));
+      }
+    }
+    this.speed = speed;
+    this.walkPhase += dt * (speed > 2 ? 11 : 6.5);
+    const swing = Math.sin(this.walkPhase) * (speed > 0 ? 0.5 : 0);
+    this.legL.rotation.x = swing;
+    this.legR.rotation.x = -swing;
+    this.armL.rotation.x = -swing * 0.8;
+    this.armR.rotation.x = swing * 0.8;
+    this.mesh.rotation.y = this.angle;
+    return true;
+  }
+}
+
+export function spawnPeds(scene, rng, count) {
+  const peds = [];
+  for (let k = 0; k < count; k++) {
+    const i = rng.int(0, GRID - 1);
+    const j = rng.int(0, GRID - 1);
+    const x = blockMin(i) - 3 + rng.range(0, BLOCK + 6);
+    const z = blockMin(j) - 3;
+    peds.push(new Ped(scene, rng, { x, z }));
+  }
+  return peds;
 }

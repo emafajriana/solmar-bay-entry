@@ -1,123 +1,133 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SOLMAR BAY — an original coastal crime city</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1b26'/%3E%3Ctext x='16' y='23' font-family='Arial' font-size='19' font-weight='900' fill='%23ffd60a' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+<meta name="description" content="Solmar Bay: an original open-world crime game in the browser. Six districts, one wanted system with a memory — District Heat.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='14' r='8' fill='%23ffb703'/%3E%3Crect y='22' width='32' height='10' fill='%232e7fa8'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="./style.css">
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.min.js" } }
 </script>
 </head>
 <body>
-<canvas id="game" aria-label="SOLMAR BAY: a 3D coastal crime city. Drive, run, take jobs, outrun the law."></canvas>
-<p id="status" role="status" aria-live="polite">SOLMAR BAY is loading.</p>
+<canvas id="game"></canvas>
 
-<div id="hud" style="display:none">
+<div id="damage"></div>
+
+<div id="hud">
   <div id="topleft">
-    <canvas id="minimap" width="196" height="196"></canvas>
-    <div id="clockline"><span id="clock">10:00</span> · <span id="radio"></span></div>
+    <div id="healthbar"><div id="healthfill"></div></div>
+    <div id="district-row">
+      <span id="district-name">Marina</span>
+      <span id="heatlabel">DISTRICT HEAT</span>
+    </div>
+    <div id="heatbar"><div id="heatfill"></div></div>
+    <div id="bustwrap"><div id="bustfill"></div><span>BUSTED</span></div>
   </div>
+
   <div id="topright">
     <div id="stars">☆☆☆☆☆</div>
-    <div id="district-name">Beachfront</div>
-    <div id="heatbar"><div id="heatfill"></div></div>
-    <div id="heatlabel">DISTRICT HEAT</div>
+    <div id="cash">$0</div>
+    <div id="clock">10:00</div>
+    <div id="radio"></div>
   </div>
-  <div id="topcenter">
-    <div id="objective"></div>
-    <div id="objdist"></div>
+
+  <div id="objective">
+    <span id="objective-label">OBJECTIVE</span>
+    <span id="objective-text"></span>
+    <span id="objective-dist"></span>
   </div>
+
   <div id="bottomleft">
-    <div id="healthbar"><div id="healthfill"></div></div>
-    <div id="cash">$250</div>
+    <div id="speedo"></div>
+    <div id="weapon"></div>
   </div>
-  <div id="bottomright">
-    <div id="speed"></div>
-    <div id="weapon">PISTOL · 48</div>
+
+  <canvas id="minimap" width="224" height="224"></canvas>
+  <div id="crosshair"></div>
+  <div id="prompt"></div>
+  <div id="toast"></div>
+
+  <div id="flash">
+    <div id="flash-text"></div>
+    <div id="flash-sub"></div>
   </div>
-  <div id="bustwrap" style="display:none"><div id="bustlabel">BUSTED</div><div id="bustbar"><div id="bustfill"></div></div></div>
-  <div id="interact" style="display:none"></div>
 </div>
 
-<div id="toast"></div>
-<div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
-
-<section id="screen-title" class="screen" style="display:none">
-  <div class="card title-card">
+<section id="screen-title" class="screen visible">
+  <div class="panel title-panel">
+    <div class="kicker">AN ORIGINAL COASTAL CRIME CITY</div>
     <h1>SOLMAR <span>BAY</span></h1>
-    <p class="tagline">An original sun-soaked coastal crime city. Eight jobs for fixer Carmen Duarte stand between you and the crown of the bay.</p>
-    <p class="signature"><strong>DISTRICT HEAT</strong> — the city's six districts remember your crimes separately. Cross a district line to cool off; stay, and that district hunts you harder.</p>
+    <p class="tagline">Six districts. One police force with a long memory.<br>
+    Every crime heats the district it happens in — and the hunt is read from the ground you stand on.</p>
     <div class="buttons">
-      <button id="btn-start">START — NEW GAME</button>
+      <button id="btn-start" class="primary">START</button>
       <button id="btn-continue">CONTINUE</button>
       <button id="btn-how">HOW TO PLAY</button>
     </div>
-    <p class="fineprint">Keyboard + mouse · desktop Chrome · headphones for the synthwave</p>
+    <p class="fineprint">Desktop browser · keyboard + mouse · sound on for the sirens</p>
   </div>
 </section>
 
-<section id="screen-how" class="screen" style="display:none">
-  <div class="card">
-    <h2>HOW TO PLAY</h2>
-    <div class="controls">
-      <p><b>W A S D</b> — move / drive &nbsp;·&nbsp; <b>Mouse</b> — look (click the game to lock the pointer)</p>
-      <p><b>Shift</b> — run &nbsp;·&nbsp; <b>Space</b> — jump on foot, handbrake in a car</p>
-      <p><b>E</b> — enter/steal a car, talk, shop, respray &nbsp;·&nbsp; <b>F</b> — punch</p>
-      <p><b>Mouse click</b> — shoot &nbsp;·&nbsp; <b>1/2/3/4</b> — fists, pistol, shotgun, rifle</p>
-      <p><b>P</b> — pause</p>
-    </div>
-    <p>Take jobs from Carmen — first at the Marina Motel phone, then at her Beachfront bar. Earn cash, buy guns at the Gun Runner, eat at the diner to heal, and cool a hot car (and a hot district) at the Pay'n'Spray. Five stars is as bad as it gets: at four, expect roadblocks. Get caught standing still next to an officer and you are <b>busted</b>.</p>
-    <div class="buttons"><button id="btn-how-back">BACK</button></div>
+<section id="screen-how" class="screen">
+  <div class="panel">
+    <h2>How to play</h2>
+    <table class="controls">
+      <tr><td>W A S D</td><td>Move / drive</td><td>Mouse</td><td>Look (click the game to lock)</td></tr>
+      <tr><td>Shift</td><td>Run</td><td>Space</td><td>Jump / handbrake</td></tr>
+      <tr><td>E</td><td>Enter a car, talk, use a shop</td><td>F</td><td>Punch</td></tr>
+      <tr><td>Click</td><td>Shoot when armed</td><td>1 / 2 / 3</td><td>Fists / pistol / heavy</td></tr>
+      <tr><td>R</td><td>Reload</td><td>P / Esc</td><td>Pause</td></tr>
+    </table>
+    <p><strong>District Heat:</strong> crimes raise the heat of the district they happen in.
+    Your stars are read from the heat of the district you are standing in — flee somewhere
+    cool and the hunt fades, while the district you left stays hot. Shine Auto's Pay'n'Spray
+    washes your district clean. Work for Carmen at La Perla in the Marina to take the bay back.</p>
+    <div class="buttons"><button id="btn-how-back" class="primary">BACK</button></div>
   </div>
 </section>
 
-<section id="screen-pause" class="screen" style="display:none">
-  <div class="card">
-    <h2>PAUSED</h2>
-    <div class="buttons">
-      <button id="btn-resume">RESUME</button>
-      <button id="btn-quit-title">QUIT TO TITLE</button>
-    </div>
-  </div>
-</section>
-
-<section id="screen-brief" class="screen" style="display:none">
-  <div class="card">
-    <h2 id="brief-title">Job</h2>
+<section id="screen-brief" class="screen">
+  <div class="panel">
+    <div class="kicker">CARMEN “LA JEFA” DUARTE</div>
+    <h2 id="brief-title">Mission</h2>
     <p id="brief-text"></p>
     <p id="brief-reward" class="reward"></p>
     <div class="buttons">
-      <button id="btn-brief-accept">TAKE THE JOB</button>
-      <button id="btn-brief-close">NOT NOW</button>
+      <button id="btn-accept" class="primary">ACCEPT</button>
+      <button id="btn-decline">NOT NOW</button>
     </div>
   </div>
 </section>
 
-<section id="screen-over" class="screen" style="display:none">
-  <div class="card">
+<section id="screen-pause" class="screen">
+  <div class="panel">
+    <h2>Paused</h2>
+    <p>The bay waits. It is good at that.</p>
+    <div class="buttons">
+      <button id="btn-resume" class="primary">RESUME</button>
+      <button id="btn-restart">RESTART DAY</button>
+    </div>
+  </div>
+</section>
+
+<section id="screen-over" class="screen">
+  <div class="panel">
     <h2 id="over-title">WASTED</h2>
-    <p id="over-text"></p>
-    <div class="buttons"><button id="btn-over-restart">BACK TO THE BAY</button></div>
+    <p id="over-sub"></p>
+    <div class="buttons"><button id="btn-again" class="primary">BACK TO THE BAY</button></div>
   </div>
 </section>
 
-<section id="screen-victory" class="screen" style="display:none">
-  <div class="card">
+<section id="screen-victory" class="screen">
+  <div class="panel">
+    <div class="kicker">LOS TIBURONES ARE DONE</div>
     <h2>KING OF THE BAY</h2>
-    <p>El Tiburón is finished, Carmen is smiling, and every district in Solmar Bay knows your name. The city is yours — free-roam it as long as you like.</p>
+    <p>The docks are Carmen's, the streets are quiet, and the heat map of Solmar Bay is green from the Hills to the harbor.</p>
     <p id="victory-stats" class="reward"></p>
-    <div class="buttons"><button id="btn-victory-roam">KEEP ROAMING</button></div>
-  </div>
-</section>
-
-<section id="screen-shop" class="screen" style="display:none">
-  <div class="card">
-    <h2>GUN RUNNER</h2>
-    <p id="shop-cash" class="reward"></p>
-    <div id="shop-items" class="buttons"></div>
-    <div class="buttons"><button id="btn-shop-close">LEAVE</button></div>
+    <div class="buttons"><button id="btn-victory-again" class="primary">KEEP PLAYING</button></div>
   </div>
 </section>
 
